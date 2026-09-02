@@ -10,8 +10,10 @@ export const STREAM_CACHE = new Map();
 export const IN_FLIGHT = new Map();
 
 const CACHE_TTL_MS = 12 * 60 * 60 * 1000;
-const RESOLVE_TIMEOUT_MS = 9_000;
-const CONVERTER_TIMEOUT_MS = 35_000;
+const COBALT_TIMEOUT_MS = 12_000;
+const RESOLVE_TIMEOUT_MS = 6_000;
+const CONVERTER_TIMEOUT_MS = 18_000;
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 const YT_CLIENTS = [
   {
@@ -35,6 +37,18 @@ const YT_CLIENTS = [
     osName: 'Android',
     osVersion: '14',
     userAgent: 'com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 14; en_US; Quest 3; Build/UP1A.231005.007.A1;)',
+    origin: 'https://www.youtube.com',
+    referer: 'https://www.youtube.com/',
+  },
+  {
+    name: 'web',
+    clientName: 'WEB',
+    clientVersion: '2.20240101.00.00',
+    deviceMake: '',
+    deviceModel: '',
+    osName: 'Windows',
+    osVersion: '10.0',
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     origin: 'https://www.youtube.com',
     referer: 'https://www.youtube.com/',
   },
@@ -156,15 +170,61 @@ async function tryClientResolver(client, videoId, visitorData) {
   }
 }
 
+async function tryCobaltResolver(videoId) {
+  // cobalt.tools: free public instance, returns direct audio URL via JSON API.
+  // Much faster than loader.to because it streams the audio directly without
+  // forcing a full video download first.
+  const instances = [
+    'https://api.cobalt.tools/api/json',
+    'https://co.wuk.sh/api/json',
+  ];
+  const sourceUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+  for (const endpoint of instances) {
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        signal: timeoutSignal(COBALT_TIMEOUT_MS),
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        },
+        body: JSON.stringify({
+          url: sourceUrl,
+          vQuality: '128',
+          aFormat: 'mp3',
+          isAudioOnly: true,
+          filenamePattern: 'classic',
+        }),
+      });
+      if (!response.ok) continue;
+      const data = await response.json();
+      const url = data.url || data.picker?.[0]?.url;
+      if (url && typeof url === 'string' && url.startsWith('http')) {
+        return {
+          ok: true,
+          provider: 'cobalt_exact_video',
+          url,
+          mimeType: 'audio/mpeg',
+          format: 'mp3',
+          title: data.title || 'Audio Track',
+        };
+      }
+    } catch (_) { /* try next instance */ }
+  }
+  return null;
+}
+
 export async function tryDirectResolver(videoId) {
   const visitorData = await getVisitorData();
-  const attempts = await Promise.all(
+  const rawAttempts = await Promise.all(
     YT_CLIENTS.map(async (client) => {
       const attempt = await tryClientResolver(client, videoId, visitorData);
-      return { client: client.name, ms: attempt.ms, ok: attempt.ok, reason: attempt.reason };
+      return { client: client.name, ms: attempt.ms, ok: attempt.ok, reason: attempt.reason, result: attempt.result };
     }),
   );
-  const success = attempts.find((a) => a.ok);
+  const attempts = rawAttempts.map(({ client, ms, ok, reason }) => ({ client, ms, ok, reason }));
+  const success = rawAttempts.find((a) => a.ok);
   if (success?.result) {
     return { ...success.result, attempts };
   }
@@ -232,6 +292,14 @@ export async function resolveStreamUrl(videoId) {
   }
 
   const promise = (async () => {
+    // 1) Try cobalt.tools first (3-8s typical, JSON API, no full video download).
+    const cobalt = await tryCobaltResolver(videoId);
+    if (cobalt) {
+      STREAM_CACHE.set(videoId, { ts: Date.now(), data: cobalt });
+      return cobalt;
+    }
+
+    // 2) Try direct InnerTube clients (instant when IP is whitelisted).
     const direct = await tryDirectResolver(videoId);
     if (direct.ok) {
       const { attempts, ...payload } = direct;
@@ -239,6 +307,7 @@ export async function resolveStreamUrl(videoId) {
       return payload;
     }
 
+    // 3) Fall back to loader.to media-cdn converter (slower, 15-30s).
     const converter = await tryMediaCdnResolver(videoId);
     if (converter) {
       STREAM_CACHE.set(videoId, { ts: Date.now(), data: converter });
@@ -247,12 +316,12 @@ export async function resolveStreamUrl(videoId) {
 
     return {
       ok: false,
-      error: `Could not prepare audio for the selected YouTube video ${videoId}`,
+      error: Could not prepare audio for the selected YouTube video ,
       attempts: direct.attempts,
     };
   })();
 
-  IN_FLIGHT.set(videoId, promise);
+IN_FLIGHT.set(videoId, promise);
   try {
     return await promise;
   } finally {
