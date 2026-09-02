@@ -135,10 +135,19 @@ class ApiService {
       final response = await http.get(uri).timeout(const Duration(seconds: 45));
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        if (data['ok'] == true && data['url'] != null) {
-          final url = data['url'] as String;
-          _log('RESOLVE', 'OK: provider=${data['provider'] ?? 'direct'} for $videoId');
-          return url;
+        if (data['ok'] == true) {
+          final provider = data['provider'] as String? ?? '';
+          // For direct YouTube streams, stream proxy endpoint ensures seamless CORS & range support.
+          if (provider.startsWith('youtube_')) {
+            final proxyUrl = '$_baseUrl/api/stream/$videoId';
+            _log('RESOLVE', 'OK: using stream proxy $proxyUrl ($provider) for $videoId');
+            return proxyUrl;
+          }
+          if (data['url'] != null) {
+            final url = data['url'] as String;
+            _log('RESOLVE', 'OK: provider=$provider for $videoId');
+            return url;
+          }
         }
       }
     } catch (e) {

@@ -11,6 +11,9 @@
   },
   "devDependencies": {
     "wrangler": "^3.111.0"
+  },
+  "dependencies": {
+    "@distube/ytdl-core": "^4.16.12",
+    "play-dl": "^1.9.7"
   }
 }
-

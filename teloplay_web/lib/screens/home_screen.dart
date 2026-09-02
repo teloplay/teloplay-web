@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:cached_network_image/cached_network_image.dart';
+import 'dart:async';
 import '../models/track.dart';
 import '../services/api_service.dart';
 import '../services/audio_player_service.dart';
@@ -50,6 +50,10 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     final tracks = await _api.searchTracks(query, limit: 25);
+
+    if (tracks.isNotEmpty) {
+      unawaited(_api.prewarmTracks(tracks.take(8).map((t) => t.id).toList()));
+    }
 
     if (mounted) {
       setState(() {

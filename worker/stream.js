@@ -9,10 +9,9 @@ import { getVisitorData } from './search.js';
 export const STREAM_CACHE = new Map();
 export const IN_FLIGHT = new Map();
 
-const COBALT_TIMEOUT_MS = 12_000;
-const RESOLVE_TIMEOUT_MS = 6_000;
-const CONVERTER_TIMEOUT_MS = 18_000;
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const RESOLVE_TIMEOUT_MS = 5_000;
+const CONVERTER_TIMEOUT_MS = 25_000;
 
 const YT_CLIENTS = [
   {
@@ -169,51 +168,6 @@ async function tryClientResolver(client, videoId, visitorData) {
   }
 }
 
-async function tryCobaltResolver(videoId) {
-  // cobalt.tools: free public instance, returns direct audio URL via JSON API.
-  // Much faster than loader.to because it streams the audio directly without
-  // forcing a full video download first.
-  const instances = [
-    'https://api.cobalt.tools/api/json',
-    'https://co.wuk.sh/api/json',
-  ];
-  const sourceUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
-  for (const endpoint of instances) {
-    try {
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        signal: timeoutSignal(COBALT_TIMEOUT_MS),
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        },
-        body: JSON.stringify({
-          url: sourceUrl,
-          vQuality: '128',
-          aFormat: 'mp3',
-          isAudioOnly: true,
-          filenamePattern: 'classic',
-        }),
-      });
-      if (!response.ok) continue;
-      const data = await response.json();
-      const url = data.url || data.picker?.[0]?.url;
-      if (url && typeof url === 'string' && url.startsWith('http')) {
-        return {
-          ok: true,
-          provider: 'cobalt_exact_video',
-          url,
-          mimeType: 'audio/mpeg',
-          format: 'mp3',
-          title: data.title || 'Audio Track',
-        };
-      }
-    } catch (_) { /* try next instance */ }
-  }
-  return null;
-}
-
 export async function tryDirectResolver(videoId) {
   const visitorData = await getVisitorData();
   const rawAttempts = await Promise.all(
@@ -250,7 +204,7 @@ export async function tryMediaCdnResolver(videoId) {
 
     const deadline = Date.now() + CONVERTER_TIMEOUT_MS;
     while (Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 600));
+      await new Promise((resolve) => setTimeout(resolve, 400));
       const progressResponse = await fetch(progressUrl, {
         signal: timeoutSignal(6_000),
         headers: {
@@ -291,32 +245,41 @@ export async function resolveStreamUrl(videoId) {
   }
 
   const promise = (async () => {
-    // 1) Try cobalt.tools first (3-8s typical, JSON API, no full video download).
-    const cobalt = await tryCobaltResolver(videoId);
-    if (cobalt) {
-      STREAM_CACHE.set(videoId, { ts: Date.now(), data: cobalt });
-      return cobalt;
-    }
+    // Start direct resolver AND media converter concurrently at millisecond 0.
+    const directPromise = tryDirectResolver(videoId);
+    const cdnPromise = tryMediaCdnResolver(videoId);
 
-    // 2) Try direct InnerTube clients (instant when IP is whitelisted).
-    const direct = await tryDirectResolver(videoId);
-    if (direct.ok) {
-      const { attempts, ...payload } = direct;
+    // Fast check: if direct resolver succeeds within 1.2s, return it immediately.
+    const directFast = await Promise.race([
+      directPromise,
+      new Promise((resolve) => setTimeout(() => resolve(null), 1200)),
+    ]);
+
+    if (directFast?.ok) {
+      const { attempts, ...payload } = directFast;
       STREAM_CACHE.set(videoId, { ts: Date.now(), data: payload });
       return payload;
     }
 
-    // 3) Fall back to loader.to media-cdn converter (slower, 15-30s).
-    const converter = await tryMediaCdnResolver(videoId);
-    if (converter) {
+    // Otherwise, wait for the converter (which was already launched at t=0).
+    const converter = await cdnPromise;
+    if (converter?.ok) {
       STREAM_CACHE.set(videoId, { ts: Date.now(), data: converter });
       return converter;
     }
 
+    // In case converter finished or failed and direct finished later:
+    const directLate = await directPromise;
+    if (directLate?.ok) {
+      const { attempts, ...payload } = directLate;
+      STREAM_CACHE.set(videoId, { ts: Date.now(), data: payload });
+      return payload;
+    }
+
     return {
       ok: false,
-      error: Could not prepare audio for the selected YouTube video ,
-      attempts: direct.attempts,
+      error: `Could not prepare audio for the selected YouTube video ${videoId}`,
+      attempts: directLate?.attempts || [],
     };
   })();
 
