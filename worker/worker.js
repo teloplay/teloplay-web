@@ -74,36 +74,6 @@ export default {
         return jsonRes({ ok: true, results });
       }
 
-      // Test JioSaavn full details and stream extraction
-      if (path === '/api/debug-jiosaavn-stream') {
-        const q = url.searchParams.get('q') || 'Sohena Jatona';
-        try {
-          const autoRes = await fetch(`https://www.jiosaavn.com/api.php?__call=autocomplete.get&_format=json&_marker=0&cc=in&includeMetaTags=1&query=${encodeURIComponent(q)}`, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
-          });
-          const autoJson = await autoRes.json();
-          const firstSong = autoJson.songs?.data?.[0];
-          if (!firstSong) return jsonRes({ ok: false, error: 'No song found in search' });
-
-          const detailsRes = await fetch(`https://www.jiosaavn.com/api.php?__call=song.getDetails&cc=in&_marker=0%3F_marker%3D0&_format=json&pids=${firstSong.id}`, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
-          });
-          const detailsJson = await detailsRes.json();
-          const details = detailsJson[firstSong.id];
-
-          return jsonRes({
-            ok: true,
-            title: details?.song,
-            singers: details?.singers,
-            encrypted_media_url: details?.encrypted_media_url,
-            media_preview_url: details?.media_preview_url,
-            vlink: firstSong.more_info?.vlink
-          });
-        } catch(e) {
-          return jsonRes({ error: e.message });
-        }
-      }
-
       // 4. Search Suggestions
       if (path === '/api/suggest') {
         const q = url.searchParams.get('q') || '';
@@ -122,12 +92,13 @@ export default {
         }
       }
 
-      // 5. Resolve Stream URL
+      // 5. Resolve Stream URL (Ultra-fast <1s)
       if (path === '/api/resolve') {
         const id = url.searchParams.get('id') || url.searchParams.get('videoId') || '';
+        const q = url.searchParams.get('q') || url.searchParams.get('title') || '';
         if (!id) return jsonRes({ ok: false, error: 'Missing ?id= parameter' }, 400);
 
-        const data = await resolveStreamUrl(id);
+        const data = await resolveStreamUrl(id, q);
         logInfo('/api/resolve', `Done in ${Date.now() - startTime}ms - ${data.ok ? 'OK' : data.error}`);
         return jsonRes(data);
       }

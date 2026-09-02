@@ -106,19 +106,22 @@ class ApiService {
   Future<String?> resolveStreamUrl(String videoId, {String? title, String? artist}) async {
     if (videoId.isEmpty) return null;
 
+    final songQuery = [title, artist].where((s) => s != null && s.trim().isNotEmpty).join(' ');
+
     try {
-      _log('RESOLVE', 'Resolving stream for $videoId');
+      _log('RESOLVE', 'Resolving stream for $videoId ("$songQuery")');
 
-      final uri = Uri.parse('$_baseUrl/api/resolve').replace(queryParameters: {
-        'id': videoId,
-      });
+      final queryParams = <String, String>{'id': videoId};
+      if (songQuery.isNotEmpty) queryParams['q'] = songQuery;
 
-      final response = await http.get(uri).timeout(const Duration(seconds: 20));
+      final uri = Uri.parse('$_baseUrl/api/resolve').replace(queryParameters: queryParams);
+
+      final response = await http.get(uri).timeout(const Duration(seconds: 12));
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         if (data['ok'] == true && data['url'] != null) {
           final url = data['url'] as String;
-          _log('RESOLVE', 'OK: provider=${data['provider'] ?? 'youtube'} for $videoId');
+          _log('RESOLVE', 'OK: provider=${data['provider'] ?? 'direct'} for $videoId');
           return url;
         }
       }
@@ -127,9 +130,11 @@ class ApiService {
     }
 
     // Fallback to stream proxy
-    final proxyUrl = '$_baseUrl/api/stream/$videoId';
-    _log('RESOLVE', 'Using stream proxy fallback: $proxyUrl');
-    return proxyUrl;
+    final proxyUri = Uri.parse('$_baseUrl/api/stream/$videoId').replace(queryParameters: {
+      if (songQuery.isNotEmpty) 'q': songQuery,
+    });
+    _log('RESOLVE', 'Using stream proxy fallback: $proxyUri');
+    return proxyUri.toString();
   }
 
   /// Get trending / top music hits

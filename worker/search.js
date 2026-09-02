@@ -45,6 +45,20 @@ export function parseDuration(text) {
   if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
   return 0;
 }
+
+const SKIP_WORDS = new Set(['Song', 'Album', 'Video', 'Single', 'EP', 'plays', 'views', '•', '|']);
+
+export function extractArtists(runs) {
+  if (!Array.isArray(runs) || runs.length === 0) return 'Unknown Artist';
+  const valid = [];
+  for (const r of runs) {
+    const txt = (r.text || '').trim();
+    if (!txt || SKIP_WORDS.has(txt) || txt.includes('plays') || txt.includes('views')) continue;
+    valid.push(txt);
+  }
+  const result = valid.join('').trim();
+  return result.length > 0 ? result : 'Unknown Artist';
+}
 export function rendererToTrack(renderer) {
   const firstColumn = renderer.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer;
   const firstRuns = firstColumn?.text?.runs || [];
@@ -59,16 +73,16 @@ export function rendererToTrack(renderer) {
     column.musicResponsiveListItemFlexColumnRenderer?.text?.runs || []
   );
   const metadataRuns = groups.flat();
-  const artistRun = metadataRuns.find(run => run.navigationEndpoint?.browseEndpoint) || metadataRuns[0];
-  const artist = artistRun?.text || 'Unknown Artist';
+
+  const artist = extractArtists(groups[0] || metadataRuns);
   const durationRun = [...metadataRuns].reverse().find(run => parseDuration(run?.text) > 0);
-  const thumbs = renderer.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails || [];
+  const thumbnail = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
 
   return {
     videoId,
     title,
     author: artist,
-    thumbnail: thumbs.at(-1)?.url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+    thumbnail,
     duration: parseDuration(durationRun?.text),
   };
 }
@@ -81,16 +95,14 @@ export function cardShelfToTrack(item) {
 
   const subtitleGroups = item?.subtitle?.runs || [];
   const durationText = subtitleGroups.at(-1)?.text;
-  const artist = subtitleGroups.find(run => run.navigationEndpoint?.browseEndpoint)?.text ||
-    subtitleGroups.find(run => run.text && !run.text.includes('•') && !parseDuration(run.text))?.text ||
-    'Unknown Artist';
-  const thumbs = item?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails || [];
+  const artist = extractArtists(subtitleGroups);
+  const thumbnail = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
 
   return {
     videoId,
     title: flattenRuns(titleRuns),
     author: artist,
-    thumbnail: thumbs.at(-1)?.url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+    thumbnail,
     duration: parseDuration(durationText),
   };
 }
