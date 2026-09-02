@@ -32,13 +32,27 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (workerResponse.body) {
-      const reader = workerResponse.body.getReader();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        res.write(value);
+      try {
+        const reader = workerResponse.body.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (res.writableEnded || res.destroyed) {
+            await reader.cancel();
+            break;
+          }
+          const ok = res.write(value);
+          if (!ok) {
+            await new Promise((r) => res.once('drain', r));
+          }
+        }
+      } catch (streamErr) {
+        // Normal client abort/seek disconnect
+      } finally {
+        if (!res.writableEnded) {
+          res.end();
+        }
       }
-      res.end();
     } else {
       res.end();
     }
