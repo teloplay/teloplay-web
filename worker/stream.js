@@ -9,7 +9,6 @@ import { getVisitorData } from './search.js';
 export const STREAM_CACHE = new Map();
 export const IN_FLIGHT = new Map();
 
-const CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 const COBALT_TIMEOUT_MS = 12_000;
 const RESOLVE_TIMEOUT_MS = 6_000;
 const CONVERTER_TIMEOUT_MS = 18_000;
