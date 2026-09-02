@@ -204,7 +204,7 @@ export async function tryMediaCdnResolver(videoId) {
 
     const deadline = Date.now() + CONVERTER_TIMEOUT_MS;
     while (Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 400));
+      await new Promise((resolve) => setTimeout(resolve, 250));
       const progressResponse = await fetch(progressUrl, {
         signal: timeoutSignal(6_000),
         headers: {
@@ -322,6 +322,7 @@ export async function handleStreamProxy(request, videoId, corsHeaders = {}) {
       streamResponse.headers.get('content-type') || info.mimeType || 'audio/mp4',
     );
     responseHeaders.set('Accept-Ranges', 'bytes');
+    responseHeaders.set('Cache-Control', 'public, max-age=86400');
 
     for (const header of ['content-length', 'content-range']) {
       const value = streamResponse.headers.get(header);

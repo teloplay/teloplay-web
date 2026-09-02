@@ -60,8 +60,8 @@ export default {
         const limit = parseInt(url.searchParams.get('limit') || '25', 10);
         if (!q.trim()) return jsonRes({ ok: false, error: 'Missing ?q=' }, 400);
         const results = await searchYouTubeMusic(q, limit);
-        // Background pre-warm the first few results so the first click plays instantly.
-        for (const track of results.slice(0, 5)) {
+        // Background pre-warm the first 8 results so the first click plays instantly.
+        for (const track of results.slice(0, 8)) {
           prewarmStreamUrl(track.videoId);
         }
         logInfo('/api/search', `${results.length} results in ${Date.now() - t0}ms`);

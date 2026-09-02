@@ -19,7 +19,6 @@ class AudioPlayerService {
 
   final List<Track> _queue = [];
   int _currentIndex = -1;
-  bool _isLoading = false;
   bool _isShuffle = false;
   LoopModeState _loopMode = LoopModeState.off;
 
@@ -109,7 +108,6 @@ class AudioPlayerService {
 
   Future<void> _playTrackImpl(Track track, {List<Track>? newQueue}) async {
     try {
-      _isLoading = true;
       _isLoadingController.add(true);
 
       if (newQueue != null && newQueue.isNotEmpty) {
@@ -149,6 +147,12 @@ class AudioPlayerService {
       try {
         await _player.setUrl(streamUrl);
         await _player.play();
+
+        // Background pre-warm next track in queue so next track switch is instant
+        final nextIdx = _currentIndex + 1;
+        if (nextIdx < _queue.length) {
+          unawaited(_apiService.prewarmTracks([_queue[nextIdx].id]));
+        }
       } catch (playErr) {
         debugPrint('[AudioPlayerService] Play failed: $playErr');
       }
@@ -156,7 +160,6 @@ class AudioPlayerService {
       debugPrint('[AudioPlayerService] Play track error: $e');
       _isPlayingController.add(false);
     } finally {
-      _isLoading = false;
       _isLoadingController.add(false);
     }
   }

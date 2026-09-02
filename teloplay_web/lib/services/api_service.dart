@@ -137,17 +137,11 @@ class ApiService {
         final data = jsonDecode(response.body);
         if (data['ok'] == true) {
           final provider = data['provider'] as String? ?? '';
-          // For direct YouTube streams, stream proxy endpoint ensures seamless CORS & range support.
-          if (provider.startsWith('youtube_')) {
-            final proxyUrl = '$_baseUrl/api/stream/$videoId';
-            _log('RESOLVE', 'OK: using stream proxy $proxyUrl ($provider) for $videoId');
-            return proxyUrl;
-          }
-          if (data['url'] != null) {
-            final url = data['url'] as String;
-            _log('RESOLVE', 'OK: provider=$provider for $videoId');
-            return url;
-          }
+          // Always route via backend stream proxy to guarantee smooth buffering,
+          // zero CORS issues, and prevent the 2s audio pause/stutter.
+          final proxyUrl = '$_baseUrl/api/stream/$videoId';
+          _log('RESOLVE', 'OK: using stream proxy $proxyUrl ($provider) for $videoId');
+          return proxyUrl;
         }
       }
     } catch (e) {
