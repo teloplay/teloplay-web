@@ -8,8 +8,8 @@ class ApiService {
   factory ApiService() => _instance;
   ApiService._internal();
 
-  // Default Cloudflare Worker URL
-  String _baseUrl = 'https://teloplay-stream-worker.teloplay-verify.workers.dev';
+  // Default Render Web API URL
+  String _baseUrl = 'https://teloplay-web.onrender.com';
 
   String get baseUrl => _baseUrl;
 
