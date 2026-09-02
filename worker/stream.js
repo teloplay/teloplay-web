@@ -9,6 +9,7 @@ import { getVisitorData } from './search.js';
 export const STREAM_CACHE = new Map();
 const CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 const RESOLVE_TIMEOUT_MS = 12_000;
+const CONVERTER_TIMEOUT_MS = 35_000;
 
 function timeoutSignal(timeoutMs) {
   return AbortSignal.timeout(timeoutMs);
@@ -84,6 +85,60 @@ export async function tryVisionOSResolver(videoId, visitorData) {
   }
 }
 
+/**
+ * Exact-video fallback. The converter receives the selected YouTube videoId,
+ * not a title/artist search query, so it cannot select a different track.
+ */
+export async function tryMediaCdnResolver(videoId) {
+  try {
+    const sourceUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+    const initUrl = `https://loader.to/ajax/download.php?button=1&start=1&end=1&format=mp3&url=${encodeURIComponent(sourceUrl)}`;
+    const initResponse = await fetch(initUrl, {
+      signal: timeoutSignal(8_000),
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json, text/plain, */*',
+      },
+    });
+    if (!initResponse.ok) return null;
+
+    const init = await initResponse.json();
+    const progressUrl = init.progress_url ||
+      (init.id ? `https://lto2.affadaffa.com/api/progress?id=${encodeURIComponent(init.id)}` : null);
+    if (!progressUrl) return null;
+
+    const deadline = Date.now() + CONVERTER_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      const progressResponse = await fetch(progressUrl, {
+        signal: timeoutSignal(6_000),
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': 'application/json, text/plain, */*',
+        },
+      });
+      if (!progressResponse.ok) continue;
+
+      const progress = await progressResponse.json();
+      if (progress.success === 1 && progress.download_url) {
+        return {
+          ok: true,
+          provider: 'media_cdn_exact_video',
+          url: progress.download_url,
+          mimeType: 'audio/mpeg',
+          format: 'mp3',
+          title: progress.title || init.title || 'Audio Track',
+        };
+      }
+
+      if (String(progress.text || '').toLowerCase().includes('error')) return null;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 export async function resolveStreamUrl(videoId) {
   const cached = STREAM_CACHE.get(videoId);
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
@@ -91,17 +146,23 @@ export async function resolveStreamUrl(videoId) {
   }
 
   const visitorData = await getVisitorData();
-  const result = await tryVisionOSResolver(videoId, visitorData);
+  const visionOsResult = await tryVisionOSResolver(videoId, visitorData);
 
-  if (!result) {
-    return {
-      ok: false,
-      error: `YouTube did not provide a playable audio stream for ${videoId}`,
-    };
+  if (visionOsResult) {
+    STREAM_CACHE.set(videoId, { ts: Date.now(), data: visionOsResult });
+    return visionOsResult;
   }
 
-  STREAM_CACHE.set(videoId, { ts: Date.now(), data: result });
-  return result;
+  const converterResult = await tryMediaCdnResolver(videoId);
+  if (converterResult) {
+    STREAM_CACHE.set(videoId, { ts: Date.now(), data: converterResult });
+    return converterResult;
+  }
+
+  return {
+    ok: false,
+    error: `Could not prepare audio for the selected YouTube video ${videoId}`,
+  };
 }
 
 export async function handleStreamProxy(request, videoId, corsHeaders = {}) {

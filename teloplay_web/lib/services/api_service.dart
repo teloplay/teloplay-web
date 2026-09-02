@@ -116,7 +116,9 @@ class ApiService {
 
       final uri = Uri.parse('$_baseUrl/api/resolve').replace(queryParameters: queryParams);
 
-      final response = await http.get(uri).timeout(const Duration(seconds: 12));
+      // Exact-video converter fallback can take about 15-35 seconds on a cold
+      // request, so do not abandon this request and switch to a failing proxy.
+      final response = await http.get(uri).timeout(const Duration(seconds: 45));
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         if (data['ok'] == true && data['url'] != null) {
@@ -129,12 +131,8 @@ class ApiService {
       _log('RESOLVE', 'Resolve API exception for $videoId', e);
     }
 
-    // Fallback to stream proxy
-    final proxyUri = Uri.parse('$_baseUrl/api/stream/$videoId').replace(queryParameters: {
-      if (songQuery.isNotEmpty) 'q': songQuery,
-    });
-    _log('RESOLVE', 'Using stream proxy fallback: $proxyUri');
-    return proxyUri.toString();
+    _log('RESOLVE', 'No exact stream could be resolved for $videoId');
+    return null;
   }
 
   /// Get trending / top music hits
