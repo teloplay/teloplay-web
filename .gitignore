@@ -1,0 +1,23 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Flutter / Dart
+teloplay_web/.dart_tool/
+teloplay_web/build/
+teloplay_web/.flutter-plugins-dependencies
+teloplay_web/.pub-cache/
+teloplay_web/.pub/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+*.log

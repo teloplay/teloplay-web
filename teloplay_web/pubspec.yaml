@@ -1,0 +1,44 @@
+﻿name: teloplay_web
+description: "TeloPlay Web - YouTube Music Stream App"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  
+  # Audio Playback - Background playback support
+  just_audio: ^0.9.40
+  audio_service: ^0.18.17
+  audio_session: ^0.1.21
+  
+  # HTTP requests
+  http: ^1.2.2
+  dio: ^5.7.0
+  
+  # Image caching
+  cached_network_image: ^3.4.1
+  
+  # UI
+  google_fonts: ^6.2.1
+  flutter_animate: ^4.5.2
+  
+  # State management
+  flutter_riverpod: ^2.6.1
+  
+  # Utilities
+  url_launcher: ^6.3.1
+  shared_preferences: ^2.3.4
+  rxdart: ^0.28.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

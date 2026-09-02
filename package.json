@@ -1,0 +1,19 @@
+{
+  "name": "teloplay-web",
+  "version": "1.0.0",
+  "description": "TeloPlay Web - Fast Music Streaming & Player",
+  "main": "worker/worker_runner.js",
+  "type": "module",
+  "scripts": {
+    "start": "node worker/worker_runner.js",
+    "deploy:worker": "cd worker && npm run deploy"
+  },
+  "keywords": [
+    "music",
+    "stream",
+    "flutter",
+    "innertube"
+  ],
+  "author": "teloplay",
+  "license": "MIT"
+}

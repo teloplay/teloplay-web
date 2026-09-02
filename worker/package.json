@@ -1,0 +1,16 @@
+{
+  "name": "teloplay-stream-worker",
+  "version": "1.0.0",
+  "description": "InnerTube stream proxy and search worker for TeloPlay",
+  "main": "worker.js",
+  "type": "module",
+  "scripts": {
+    "start": "node worker_runner.js",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail teloplay-stream-worker"
+  },
+  "devDependencies": {
+    "wrangler": "^3.111.0"
+  }
+}
+
