@@ -14,6 +14,8 @@ class AudioPlayerService {
 
   final AudioPlayer _player = AudioPlayer();
   final ApiService _apiService = ApiService();
+  Future<void>? _playPending;
+  String? _pendingToken;
 
   final List<Track> _queue = [];
   int _currentIndex = -1;
@@ -87,6 +89,25 @@ class AudioPlayerService {
   }
 
   Future<void> playTrack(Track track, {List<Track>? newQueue}) async {
+    final token = '${track.id}-${DateTime.now().microsecondsSinceEpoch}';
+    _pendingToken = token;
+    final previous = _playPending ?? Future.value();
+    final completer = Completer<void>();
+    _playPending = completer.future;
+    try {
+      await previous;
+      if (_pendingToken != token) return;
+      await _playTrackImpl(track, newQueue: newQueue);
+    } finally {
+      if (identical(_playPending, completer.future)) {
+        _playPending = null;
+        _pendingToken = null;
+      }
+      completer.complete();
+    }
+  }
+
+  Future<void> _playTrackImpl(Track track, {List<Track>? newQueue}) async {
     try {
       _isLoading = true;
       _isLoadingController.add(true);

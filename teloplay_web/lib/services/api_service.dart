@@ -78,6 +78,20 @@ class ApiService {
     return [];
   }
 
+  /// Pre-warm stream cache for a batch of videoIds. Fire-and-forget.
+  Future<void> prewarmTracks(List<String> videoIds) async {
+    if (videoIds.isEmpty) return;
+    final ids = videoIds.where((id) => id.isNotEmpty).take(8).join(',');
+    if (ids.isEmpty) return;
+    try {
+      final uri = Uri.parse('$_baseUrl/api/prewarm').replace(queryParameters: {'ids': ids});
+      await http.get(uri).timeout(const Duration(seconds: 4));
+    } catch (e) {
+      _log('PREWARM', 'Failed to prewarm $ids', e);
+    }
+  }
+
+
   /// Get search suggestions
   Future<List<String>> getSuggestions(String query) async {
     final cleanQuery = query.trim();

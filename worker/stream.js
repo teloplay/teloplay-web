@@ -165,9 +165,8 @@ export async function tryDirectResolver(videoId) {
     }),
   );
   const success = attempts.find((a) => a.ok);
-  if (success) {
-    const result = success.result;
-    if (result) return { ...result, attempts };
+  if (success?.result) {
+    return { ...success.result, attempts };
   }
   return { ok: false, attempts };
 }
@@ -192,7 +191,7 @@ export async function tryMediaCdnResolver(videoId) {
 
     const deadline = Date.now() + CONVERTER_TIMEOUT_MS;
     while (Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 700));
+      await new Promise((resolve) => setTimeout(resolve, 600));
       const progressResponse = await fetch(progressUrl, {
         signal: timeoutSignal(6_000),
         headers: {
@@ -201,7 +200,6 @@ export async function tryMediaCdnResolver(videoId) {
         },
       });
       if (!progressResponse.ok) continue;
-
       const progress = await progressResponse.json();
       if (progress.success === 1 && progress.download_url) {
         return {
@@ -213,7 +211,6 @@ export async function tryMediaCdnResolver(videoId) {
           title: progress.title || init.title || 'Audio Track',
         };
       }
-
       if (String(progress.text || '').toLowerCase().includes('error')) return null;
     }
   } catch {

@@ -1,4 +1,5 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
+import 'dart:async';
 import '../models/track.dart';
 import '../services/api_service.dart';
 import '../services/audio_player_service.dart';
@@ -33,6 +34,12 @@ class _SearchScreenState extends State<SearchScreen> {
     });
 
     final tracks = await _api.searchTracks(clean, limit: 50);
+
+    if (tracks.isNotEmpty) {
+      // Fire-and-forget server-side pre-warm of the first 8 results so the
+      // first tap is much faster.
+      unawaited(_api.prewarmTracks(tracks.map((t) => t.id).toList()));
+    }
 
     if (mounted) {
       setState(() {
