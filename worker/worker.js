@@ -1,5 +1,5 @@
-import { searchYouTubeMusic, getVisitorData } from './search.js';
-import { resolveStreamUrl, handleStreamProxy, STREAM_CACHE } from './stream.js';
+﻿import { searchYouTubeMusic, getVisitorData } from './search.js';
+import { resolveStreamUrl, handleStreamProxy, STREAM_CACHE, prewarmStreamUrl } from './stream.js';
 
 const ERROR_LOG = [];
 const MAX_LOG = 50;
@@ -44,6 +44,13 @@ export default {
         return jsonRes({ ok: true, pong: true });
       }
 
+      if (path === '/api/diag') {
+        const id = url.searchParams.get('id') || 'zAiIgYOH4Ys';
+        const { tryDirectResolver } = await import('./stream.js');
+        const r = await tryDirectResolver(id);
+        return jsonRes({ ok: r.ok, provider: r.provider, attempts: r.attempts });
+      }
+
       if (path === '/api/errors') {
         return jsonRes({ ok: true, errorCount: ERROR_LOG.length, cachedStreams: STREAM_CACHE.size, errors: ERROR_LOG });
       }
@@ -53,8 +60,18 @@ export default {
         const limit = parseInt(url.searchParams.get('limit') || '25', 10);
         if (!q.trim()) return jsonRes({ ok: false, error: 'Missing ?q=' }, 400);
         const results = await searchYouTubeMusic(q, limit);
+        // Background pre-warm the first few results so the first click plays instantly.
+        for (const track of results.slice(0, 5)) {
+          prewarmStreamUrl(track.videoId);
+        }
         logInfo('/api/search', `${results.length} results in ${Date.now() - t0}ms`);
         return jsonRes({ ok: true, results });
+      }
+
+      if (path === '/api/prewarm') {
+        const ids = (url.searchParams.get('ids') || '').split(',').map((s) => s.trim()).filter(Boolean);
+        for (const id of ids) prewarmStreamUrl(id);
+        return jsonRes({ ok: true, queued: ids.length });
       }
 
       if (path === '/api/suggest') {
@@ -64,7 +81,7 @@ export default {
           const r = await fetch(`https://suggestqueries.google.com/complete/search?client=youtube&ds=yt&q=${encodeURIComponent(q)}`);
           const t = await r.text();
           const m = t.match(/\((.*)\)/);
-          return jsonRes({ ok: true, suggestions: m ? JSON.parse(m[1])[1].map(s => s[0]) : [] });
+          return jsonRes({ ok: true, suggestions: m ? JSON.parse(m[1])[1].map((s) => s[0]) : [] });
         } catch (e) {
           return jsonRes({ ok: true, suggestions: [] });
         }

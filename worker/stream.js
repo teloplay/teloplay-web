@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Exact YouTube audio resolver.
  * The resolver always uses the videoId selected by the search result. It never
  * searches another provider, so returned audio cannot be silently substituted.
@@ -7,38 +7,108 @@
 import { getVisitorData } from './search.js';
 
 export const STREAM_CACHE = new Map();
+export const IN_FLIGHT = new Map();
+
 const CACHE_TTL_MS = 12 * 60 * 60 * 1000;
-const RESOLVE_TIMEOUT_MS = 12_000;
+const RESOLVE_TIMEOUT_MS = 9_000;
 const CONVERTER_TIMEOUT_MS = 35_000;
+
+const YT_CLIENTS = [
+  {
+    name: 'ios',
+    clientName: '5',
+    clientVersion: '20.10.4',
+    deviceMake: 'Apple',
+    deviceModel: 'iPad16,3',
+    osName: 'iPadOS',
+    osVersion: '18.0.1.22A350',
+    userAgent: 'com.google.ios.youtube/20.10.4 (iPad16,3; U; CPU iPadOS 18_0_1 like Mac OS X;)',
+    origin: 'https://www.youtube.com',
+    referer: 'https://www.youtube.com/',
+  },
+  {
+    name: 'android_vr',
+    clientName: '28',
+    clientVersion: '1.60.19',
+    deviceMake: 'Google',
+    deviceModel: 'Quest 3',
+    osName: 'Android',
+    osVersion: '14',
+    userAgent: 'com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 14; en_US; Quest 3; Build/UP1A.231005.007.A1;)',
+    origin: 'https://www.youtube.com',
+    referer: 'https://www.youtube.com/',
+  },
+  {
+    name: 'tv_embedded',
+    clientName: '85',
+    clientVersion: '2.0.0',
+    deviceMake: 'Google',
+    deviceModel: 'ATV',
+    osName: 'Android',
+    osVersion: '14',
+    userAgent: 'Mozilla/5.0 (PlayStation; PlayStation 4/12.00) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15',
+    origin: 'https://www.youtube.com',
+    referer: 'https://www.youtube.com/',
+  },
+  {
+    name: 'visionos',
+    clientName: '101',
+    clientVersion: '0.1',
+    deviceMake: 'Apple',
+    deviceModel: 'RealityDevice14,1',
+    osName: 'visionOS',
+    osVersion: '1.3.21O771',
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15',
+    origin: 'https://music.youtube.com',
+    referer: 'https://music.youtube.com/',
+  },
+];
 
 function timeoutSignal(timeoutMs) {
   return AbortSignal.timeout(timeoutMs);
 }
 
-export async function tryVisionOSResolver(videoId, visitorData) {
+function tryExtractAudioUrl(json) {
+  const formats = [
+    ...(json.streamingData?.adaptiveFormats || []),
+    ...(json.streamingData?.formats || []),
+  ];
+  const audioFormats = formats.filter(
+    (format) => format.mimeType?.startsWith('audio/') && typeof format.url === 'string',
+  );
+  if (audioFormats.length === 0) return null;
+  return (
+    audioFormats.find((format) => format.itag === 140) ||
+    audioFormats.find((format) => format.itag === 251) ||
+    audioFormats[0]
+  );
+}
+
+async function tryClientResolver(client, videoId, visitorData) {
+  const start = Date.now();
   try {
     const response = await fetch(
-      'https://music.youtube.com/youtubei/v1/player?prettyPrint=false',
+      'https://www.youtube.com/youtubei/v1/player?prettyPrint=false',
       {
         method: 'POST',
         signal: timeoutSignal(RESOLVE_TIMEOUT_MS),
         headers: {
           'Content-Type': 'application/json',
-          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15',
-          'X-YouTube-Client-Name': '101',
-          'X-YouTube-Client-Version': '0.1',
-          'Origin': 'https://music.youtube.com',
-          'Referer': 'https://music.youtube.com/',
+          'User-Agent': client.userAgent,
+          'X-YouTube-Client-Name': client.clientName,
+          'X-YouTube-Client-Version': client.clientVersion,
+          'Origin': client.origin,
+          'Referer': client.referer,
         },
         body: JSON.stringify({
           context: {
             client: {
-              clientName: 'VISIONOS',
-              clientVersion: '0.1',
-              osName: 'visionOS',
-              osVersion: '1.3.21O771',
-              deviceMake: 'Apple',
-              deviceModel: 'RealityDevice14,1',
+              clientName: client.clientName,
+              clientVersion: client.clientVersion,
+              deviceMake: client.deviceMake,
+              deviceModel: client.deviceModel,
+              osName: client.osName,
+              osVersion: client.osVersion,
               gl: 'US',
               hl: 'en',
               visitorData: visitorData || undefined,
@@ -49,46 +119,59 @@ export async function tryVisionOSResolver(videoId, visitorData) {
       },
     );
 
-    if (!response.ok) return null;
+    if (!response.ok) {
+      return { ok: false, ms: Date.now() - start, reason: `HTTP ${response.status}` };
+    }
 
     const json = await response.json();
-    if (json.playabilityStatus?.status !== 'OK') return null;
+    if (json.playabilityStatus?.status !== 'OK') {
+      return {
+        ok: false,
+        ms: Date.now() - start,
+        reason: json.playabilityStatus?.status || 'unplayable',
+      };
+    }
 
-    const formats = [
-      ...(json.streamingData?.adaptiveFormats || []),
-      ...(json.streamingData?.formats || []),
-    ];
-    const audioFormats = formats.filter((format) =>
-      format.mimeType?.startsWith('audio/') && typeof format.url === 'string',
-    );
-    const best =
-      audioFormats.find((format) => format.itag === 140) ||
-      audioFormats.find((format) => format.itag === 251) ||
-      audioFormats[0];
-
-    if (!best?.url) return null;
+    const best = tryExtractAudioUrl(json);
+    if (!best?.url) return { ok: false, ms: Date.now() - start, reason: 'no audio url' };
 
     return {
       ok: true,
-      provider: 'youtube_visionos',
-      url: best.url,
-      mimeType: best.mimeType,
-      itag: best.itag,
-      bitrate: best.bitrate,
-      contentLength: best.contentLength ? Number.parseInt(best.contentLength, 10) : undefined,
-      duration: Number.parseInt(json.videoDetails?.lengthSeconds || '0', 10),
-      title: json.videoDetails?.title || 'Unknown',
-      author: json.videoDetails?.author || 'Unknown',
+      ms: Date.now() - start,
+      result: {
+        ok: true,
+        provider: `youtube_${client.name}`,
+        url: best.url,
+        mimeType: best.mimeType,
+        itag: best.itag,
+        bitrate: best.bitrate,
+        contentLength: best.contentLength ? Number.parseInt(best.contentLength, 10) : undefined,
+        duration: Number.parseInt(json.videoDetails?.lengthSeconds || '0', 10),
+        title: json.videoDetails?.title || 'Unknown',
+        author: json.videoDetails?.author || 'Unknown',
+      },
     };
-  } catch {
-    return null;
+  } catch (error) {
+    return { ok: false, ms: Date.now() - start, reason: error?.message || 'error' };
   }
 }
 
-/**
- * Exact-video fallback. The converter receives the selected YouTube videoId,
- * not a title/artist search query, so it cannot select a different track.
- */
+export async function tryDirectResolver(videoId) {
+  const visitorData = await getVisitorData();
+  const attempts = await Promise.all(
+    YT_CLIENTS.map(async (client) => {
+      const attempt = await tryClientResolver(client, videoId, visitorData);
+      return { client: client.name, ms: attempt.ms, ok: attempt.ok, reason: attempt.reason };
+    }),
+  );
+  const success = attempts.find((a) => a.ok);
+  if (success) {
+    const result = success.result;
+    if (result) return { ...result, attempts };
+  }
+  return { ok: false, attempts };
+}
+
 export async function tryMediaCdnResolver(videoId) {
   try {
     const sourceUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
@@ -140,29 +223,52 @@ export async function tryMediaCdnResolver(videoId) {
 }
 
 export async function resolveStreamUrl(videoId) {
+  if (!videoId) return { ok: false, error: 'Missing videoId' };
+
   const cached = STREAM_CACHE.get(videoId);
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
     return { ...cached.data, cached: true };
   }
 
-  const visitorData = await getVisitorData();
-  const visionOsResult = await tryVisionOSResolver(videoId, visitorData);
-
-  if (visionOsResult) {
-    STREAM_CACHE.set(videoId, { ts: Date.now(), data: visionOsResult });
-    return visionOsResult;
+  if (IN_FLIGHT.has(videoId)) {
+    return IN_FLIGHT.get(videoId);
   }
 
-  const converterResult = await tryMediaCdnResolver(videoId);
-  if (converterResult) {
-    STREAM_CACHE.set(videoId, { ts: Date.now(), data: converterResult });
-    return converterResult;
-  }
+  const promise = (async () => {
+    const direct = await tryDirectResolver(videoId);
+    if (direct.ok) {
+      const { attempts, ...payload } = direct;
+      STREAM_CACHE.set(videoId, { ts: Date.now(), data: payload });
+      return payload;
+    }
 
-  return {
-    ok: false,
-    error: `Could not prepare audio for the selected YouTube video ${videoId}`,
-  };
+    const converter = await tryMediaCdnResolver(videoId);
+    if (converter) {
+      STREAM_CACHE.set(videoId, { ts: Date.now(), data: converter });
+      return converter;
+    }
+
+    return {
+      ok: false,
+      error: `Could not prepare audio for the selected YouTube video ${videoId}`,
+      attempts: direct.attempts,
+    };
+  })();
+
+  IN_FLIGHT.set(videoId, promise);
+  try {
+    return await promise;
+  } finally {
+    IN_FLIGHT.delete(videoId);
+  }
+}
+
+export function prewarmStreamUrl(videoId) {
+  if (!videoId) return Promise.resolve(null);
+  if (STREAM_CACHE.has(videoId)) return Promise.resolve(STREAM_CACHE.get(videoId).data);
+  if (IN_FLIGHT.has(videoId)) return IN_FLIGHT.get(videoId);
+  resolveStreamUrl(videoId).catch(() => null);
+  return Promise.resolve(null);
 }
 
 export async function handleStreamProxy(request, videoId, corsHeaders = {}) {
