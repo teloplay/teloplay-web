@@ -51,6 +51,141 @@ const DURATION_REGEX = /^\d{1,2}:\d{2}(:\d{2})?$/;
 const VIEWS_REGEX = /^(\d+(\.\d+)?)\s*(K|M|B|million|billion|thousand)?\s*(views|plays)$/i;
 const SEPARATOR = '•';
 
+// ─── Result prioritization ────────────────────────────────────────────────
+// YouTube Music's default order surfaces "Top 10", "Best of", jukebox
+// compilations ahead of actual individual songs, which is the wrong
+// ranking for a music app. We re-rank merged results so that the most
+// likely-to-be-wanted individual official track comes first.
+const OFFICIAL_CHANNEL_HINTS = [
+  'T-Series', 'Tseries', 'TSeries',
+  'Sony Music', 'SonyMusic',
+  'Zee Music', 'ZeeMusic',
+  'Tips Official',
+  'YRF', 'Yash Raj Films',
+  'Aditya Music', 'AdityaMusic',
+  'Lahari Music', 'LahariMusic', 'Lahari',
+  'Saregama',
+  'Universal Music', 'UniversalMusic',
+  'Warner Music', 'Warner Bros',
+  'Speed Records', 'SpeedRecords',
+  'Venus Records', 'Venus',
+  'Times Music', 'TimesMusic',
+  'White Hill', 'WhiteHill',
+  'Geet MP3', 'GeetMp3',
+  'Shemaroo',
+  'Dharma', 'Dharma Productions',
+  'Excel Entertainment',
+];
+
+const COMPILATION_TITLE_PATTERNS = [
+  /\btop\s*\d+\b/i,
+  /\bbest\s+of\b/i,
+  /\ball\s+songs?\b/i,
+  /\bsongs?\s+list\b/i,
+  /\bsad\s+songs?\b/i,
+  /\bsad\s+status\b/i,
+  /\bromantic\s+songs?\b/i,
+  /\blove\s+songs?\b/i,
+  /\bnon[\s-]?stop\b/i,
+  /\bnonstop\b/i,
+  /\bju(ke|ke)box\b/i,
+  /\bunlimited\s+songs?\b/i,
+  /\b\d+\s*hours?\s+of\b/i,
+  /\b\d+\s*min(utes)?\s+of\b/i,
+  /\bvideo\s+jukebox\b/i,
+  /\baudio\s+ju(ke|ke)box\b/i,
+  /\bofficial\s+video\s+collection\b/i,
+  /\bhit(s)?\s+collection\b/i,
+  /\bgreatest\s+hit(s)?\b/i,
+  /\b\d+\s+best\b/i,
+  /\bmashup\b/i,
+  /\blofi\b/i,
+  /\bsleep\s+music\b/i,
+  /\bmeditation\b/i,
+  /\bblack\s+screen\b/i,
+  /\b8d\s+audio\b/i,
+  /\b\d+\s+songs?\s+of\b/i,
+];
+
+const PLAYLIST_TITLE_HINTS = [
+  '| playlist', 'playlist |', '| mix', 'mix |', '| station', 'station |',
+  'radio |', '| radio', 'album |', '| album',
+];
+
+const COMPILATION_AUTHOR_HINTS = [
+  'songs collection', 'indian songs', 'hindi songs', 'tamil songs',
+  'telugu songs', 'sad songs', 'romantic songs', 'love songs',
+  'old songs', 'punjabi songs', 'bengali songs', 'all songs',
+  'jukebox', 'unlimited songs', 'hits collection',
+];
+
+function isCompilationTitle(title) {
+  if (!title) return false;
+  return COMPILATION_TITLE_PATTERNS.some((re) => re.test(title));
+}
+
+function isPlaylistTitle(title) {
+  if (!title) return false;
+  return PLAYLIST_TITLE_HINTS.some((hint) => title.toLowerCase().includes(hint));
+}
+
+function isCompilationAuthor(author) {
+  if (!author) return false;
+  const a = String(author).toLowerCase().trim();
+  if (!a) return false;
+  if (a.includes(' - topic') || a.endsWith(' topic')) return true;
+  if (a.includes('vevo')) return true;
+  return COMPILATION_AUTHOR_HINTS.some((h) => a.includes(h));
+}
+
+function isOfficialAuthor(author) {
+  if (!author || author === 'Unknown Artist') return false;
+  const a = String(author).trim();
+  return OFFICIAL_CHANNEL_HINTS.some((h) => a.toLowerCase().includes(h.toLowerCase()));
+}
+
+function trackPriority(track) {
+  if (!track) return 99;
+  const title = track.title || '';
+  const author = track.author || '';
+  const hasAlbum = !!(track.albumName && track.albumName.trim().length > 0);
+  const hasDuration = !!track.duration && track.duration > 0;
+
+  if (isPlaylistTitle(title)) return 100;
+  if (isCompilationTitle(title)) return 80;
+  if (isCompilationAuthor(author) && !hasAlbum) return 70;
+
+  if (isOfficialAuthor(author)) {
+    if (hasAlbum && hasDuration) return 5;
+    if (hasDuration) return 10;
+    return 30;
+  }
+
+  if (hasAlbum && hasDuration) return 20;
+  if (hasDuration) return 40;
+  return 90;
+}
+
+function rankTracks(tracks, query) {
+  const q = (query || '').toLowerCase().trim();
+  return tracks.slice().sort((a, b) => {
+    const pa = trackPriority(a);
+    const pb = trackPriority(b);
+    if (pa !== pb) return pa - pb;
+    const la = (a.title || '').length;
+    const lb = (b.title || '').length;
+    if (la !== lb) return lb - la;
+    if (q) {
+      const ia = (a.title || '').toLowerCase().indexOf(q);
+      const ib = (b.title || '').toLowerCase().indexOf(q);
+      const sa = ia === -1 ? 9999 : ia;
+      const sb = ib === -1 ? 9999 : ib;
+      if (sa !== sb) return sa - sb;
+    }
+    return 0;
+  });
+}
+
 export function extractTrackInfo(flexColumns) {
   if (!Array.isArray(flexColumns) || flexColumns.length < 2) {
     return { artist: 'Unknown Artist', albumName: '', duration: 0 };
@@ -366,9 +501,11 @@ export async function searchYouTubeMusic(query, limit = 25) {
   const musicTracks = musicResult.status === 'fulfilled' ? musicResult.value : [];
   const webTracks = webResult.status === 'fulfilled' ? webResult.value : [];
   const tracks = [...musicTracks, ...webTracks];
-  return tracks.filter((track, index, list) =>
+  const deduped = tracks.filter((track, index, list) =>
     list.findIndex(item => item.videoId === track.videoId) === index
-  ).slice(0, targetCount);
+  );
+  // Re-rank so official individual tracks come first, compilations/mixes last.
+  return rankTracks(deduped, query).slice(0, targetCount);
 }
 
 export async function getVideoMetadata(videoId) {
