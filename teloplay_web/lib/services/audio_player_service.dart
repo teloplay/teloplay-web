@@ -163,6 +163,16 @@ class AudioPlayerService {
       _isLoadingController.add(false);
     }
   }
+  /// Cancels an unresolved stream request. This is safe to call while the
+  /// player is loading, and lets the user immediately choose another track.
+  Future<void> cancelPendingLoad() async {
+    _pendingToken = null;
+    _isLoadingController.add(false);
+    try {
+      await _player.stop();
+    } catch (_) {}
+  }
+
   Future<void> pause() async {
     await _player.pause();
   }

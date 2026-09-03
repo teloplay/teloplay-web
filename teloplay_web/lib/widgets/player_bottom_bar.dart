@@ -143,13 +143,14 @@ class _PlayerBottomBarState extends State<PlayerBottomBar> {
       stream: _audio.isLoadingStream,
       builder: (context, loadSnap) {
         if (loadSnap.data ?? false) {
-          return const SizedBox(
-            width: 38,
-            height: 38,
-            child: Padding(
-              padding: EdgeInsets.all(8.0),
-              child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFFF3B5C)),
+          return IconButton(
+            tooltip: 'Cancel loading',
+            icon: const Icon(
+              Icons.close_rounded,
+              color: Color(0xFFFF3B5C),
+              size: 30,
             ),
+            onPressed: _audio.cancelPendingLoad,
           );
         }
         return StreamBuilder<bool>(
