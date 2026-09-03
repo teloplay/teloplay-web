@@ -46,19 +46,49 @@ export function parseDuration(text) {
   return 0;
 }
 
-const SKIP_WORDS = new Set(['Song', 'Album', 'Video', 'Single', 'EP', 'plays', 'views', '•', '|']);
+const DATE_REGEX = /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4}$/i;
+const DURATION_REGEX = /^\d{1,2}:\d{2}(:\d{2})?$/;
+const VIEWS_REGEX = /^\d+(\.\d+)?(K|M|B)?\s+(views|plays)$/i;
 
-export function extractArtists(runs) {
-  if (!Array.isArray(runs) || runs.length === 0) return 'Unknown Artist';
-  const valid = [];
-  for (const r of runs) {
-    const txt = (r.text || '').trim();
-    if (!txt || SKIP_WORDS.has(txt) || txt.includes('plays') || txt.includes('views')) continue;
-    valid.push(txt);
+export function extractTrackInfo(flexColumns) {
+  if (!Array.isArray(flexColumns) || flexColumns.length < 2) {
+    return { artist: 'Unknown Artist', duration: 0 };
   }
-  const result = valid.join('').trim();
-  return result.length > 0 ? result : 'Unknown Artist';
+
+  const firstRuns = flexColumns[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || [];
+  const secondRuns = flexColumns[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || [];
+  const thirdRuns = flexColumns[2]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || [];
+  const allRuns = [...secondRuns, ...thirdRuns];
+
+  let durationSec = 0;
+  // Look for exact duration (e.g. "2:51" or "03:45")
+  for (const r of allRuns) {
+    const txt = (r.text || '').trim();
+    if (DURATION_REGEX.test(txt)) {
+      durationSec = parseDuration(txt);
+      break;
+    }
+  }
+
+  // Look for artists (ignore Date, views, duration, song/album type)
+  const artistParts = [];
+  for (const r of secondRuns) {
+    const txt = (r.text || '').trim();
+    if (!txt || txt === '•' || txt === '|' || txt === 'Song' || txt === 'Video' || txt === 'Album' || txt === 'Single') continue;
+    if (DATE_REGEX.test(txt) || DURATION_REGEX.test(txt) || VIEWS_REGEX.test(txt)) continue;
+    // Don't include text that ends with duration or date
+    if (/^\d{4}$/.test(txt)) continue;
+    artistParts.push(txt);
+  }
+
+  let artist = artistParts.join('').trim();
+  if (!artist || artist.length === 0) {
+    artist = 'Unknown Artist';
+  }
+
+  return { artist, duration: durationSec };
 }
+
 export function rendererToTrack(renderer) {
   const firstColumn = renderer.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer;
   const firstRuns = firstColumn?.text?.runs || [];
@@ -69,21 +99,15 @@ export function rendererToTrack(renderer) {
   if (!videoId) return null;
 
   const title = flattenRuns(firstRuns) || 'Unknown Title';
-  const groups = (renderer.flexColumns || []).slice(1).map(column =>
-    column.musicResponsiveListItemFlexColumnRenderer?.text?.runs || []
-  );
-  const metadataRuns = groups.flat();
-
-  const artist = extractArtists(groups[0] || metadataRuns);
-  const durationRun = [...metadataRuns].reverse().find(run => parseDuration(run?.text) > 0);
+  const info = extractTrackInfo(renderer.flexColumns || []);
   const thumbnail = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
 
   return {
     videoId,
     title,
-    author: artist,
+    author: info.artist,
     thumbnail,
-    duration: parseDuration(durationRun?.text),
+    duration: info.duration,
   };
 }
 
@@ -94,16 +118,15 @@ export function cardShelfToTrack(item) {
   if (!videoId || titleRuns.length === 0) return null;
 
   const subtitleGroups = item?.subtitle?.runs || [];
-  const durationText = subtitleGroups.at(-1)?.text;
-  const artist = extractArtists(subtitleGroups);
+  const info = extractTrackInfo([{ musicResponsiveListItemFlexColumnRenderer: { text: { runs: titleRuns } } }, { musicResponsiveListItemFlexColumnRenderer: { text: { runs: subtitleGroups } } }]);
   const thumbnail = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
 
   return {
     videoId,
     title: flattenRuns(titleRuns),
-    author: artist,
+    author: info.artist,
     thumbnail,
-    duration: parseDuration(durationText),
+    duration: info.duration,
   };
 }
 
