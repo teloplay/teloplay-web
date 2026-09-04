@@ -472,6 +472,9 @@ function continuationTokens(json) {
     .filter(Boolean);
 }
 
+export const FILTER_SONG = 'EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D';
+export const FILTER_VIDEO = 'EgWKAQIQAWoKEAkQChAFEAMQBA%3D%3D';
+
 async function searchYouTubeMusicEndpoint(query, params, visitorData, continuation) {
   const context = {
     client: {
@@ -498,13 +501,13 @@ async function searchYouTubeMusicEndpoint(query, params, visitorData, continuati
       headers,
       body: JSON.stringify(body),
     });
-    if (!response.ok) return { tracks: [], token: null };
+    if (!response.ok) return { json: null, tracks: [], token: null };
     const json = await response.json();
     const tracks = tracksFromMusicResponse(json);
     const token = continuationTokens(json)[0] || null;
-    return { tracks, token };
+    return { json, tracks, token };
   } catch (e) {
-    return { tracks: [], token: null };
+    return { json: null, tracks: [], token: null };
   }
 }
 
@@ -515,34 +518,48 @@ export async function searchYouTubeMusic(query, limit = 25) {
 
   const vd = await getVisitorData();
 
-  // Query YouTube Music in parallel:
-  // 1. "Songs" chip filter (EgWKAQIIAWoSEAkQAxAFEAQQChAQEBUQERAO) -> Pure studio tracks
-  // 2. Default search (no params) -> Captures Top Result Card shelf (musicCardShelfRenderer)
-  // 3. "Videos" chip filter (EgWKAQIQAWoSEAkQAxAFEAQQChAQEBUQERAO) -> Official music videos
-  const [songsRes, defaultRes, videosRes] = await Promise.allSettled([
-    searchYouTubeMusicEndpoint(cleanQuery, 'EgWKAQIIAWoSEAkQAxAFEAQQChAQEBUQERAO', vd),
+  // Query YouTube Music like OpenTune / InnerTube:
+  // 1. Default search (no params) -> Captures Top Result Card shelf (musicCardShelfRenderer)
+  // 2. "Songs" filter (EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D) -> Canonical songs in fresh InnerTube relevance order
+  // 3. "Videos" filter (EgWKAQIQAWoKEAkQChAFEAMQBA%3D%3D) -> Official music videos
+  const [defaultRes, songsRes, videosRes] = await Promise.allSettled([
     searchYouTubeMusicEndpoint(cleanQuery, undefined, vd),
-    searchYouTubeMusicEndpoint(cleanQuery, 'EgWKAQIQAWoSEAkQAxAFEAQQChAQEBUQERAO', vd),
+    searchYouTubeMusicEndpoint(cleanQuery, FILTER_SONG, vd),
+    searchYouTubeMusicEndpoint(cleanQuery, FILTER_VIDEO, vd),
   ]);
 
+  // 1. Extract Top Result card & sub-items from default search
+  const topCardTracks = [];
+  if (defaultRes.status === 'fulfilled' && defaultRes.value?.json) {
+    const cardShelves = findItems(defaultRes.value.json, 'musicCardShelfRenderer');
+    for (const shelf of cardShelves) {
+      const top = cardShelfToTrack(shelf);
+      if (top) topCardTracks.push(top);
+      for (const item of (shelf.contents || [])) {
+        const t = cardShelfToTrack(item.musicResponsiveListItemRenderer);
+        if (t) topCardTracks.push(t);
+      }
+    }
+  }
+
   const songsTracks = songsRes.status === 'fulfilled' ? songsRes.value.tracks : [];
-  const defaultTracks = defaultRes.status === 'fulfilled' ? defaultRes.value.tracks : [];
   const videosTracks = videosRes.status === 'fulfilled' ? videosRes.value.tracks : [];
 
-  // Put Songs first so rich metadata (duration, album name) takes precedence
-  let merged = [...songsTracks, ...defaultTracks, ...videosTracks];
+  // Order: Top Result Card -> Pure Songs -> Videos
+  let merged = [...topCardTracks, ...songsTracks, ...videosTracks];
 
   // If user requested a large limit and continuation token is available, fetch next page
-  if (targetCount > 25 && defaultRes.status === 'fulfilled' && defaultRes.value.token) {
+  if (targetCount > 25 && songsRes.status === 'fulfilled' && songsRes.value.token) {
     try {
-      const nextPage = await searchYouTubeMusicEndpoint(cleanQuery, undefined, vd, defaultRes.value.token);
+      const nextPage = await searchYouTubeMusicEndpoint(cleanQuery, FILTER_SONG, vd, songsRes.value.token);
       if (nextPage.tracks.length > 0) {
         merged.push(...nextPage.tracks);
       }
     } catch (e) {}
   }
 
-  // Deduplicate by videoId while merging richer metadata (duration, albumName, plays, cardShelf)
+  // Deduplicate by videoId while preserving the natural fresh InnerTube order
+  // and merging richer metadata (duration, albumName, plays)
   const trackMap = new Map();
   for (const t of merged) {
     if (!t || !t.videoId) continue;
@@ -559,25 +576,11 @@ export async function searchYouTubeMusic(query, limit = 25) {
 
   let candidates = Array.from(trackMap.values());
 
-  // If YouTube Music returned fewer than 5 tracks (e.g. extremely obscure query),
-  // supplement with YouTube Web search as a fallback
-  if (candidates.length < 5) {
-    try {
-      const webTracks = await searchYouTubeWeb(cleanQuery);
-      for (const wt of webTracks) {
-        if (!trackMap.has(wt.videoId)) {
-          candidates.push(wt);
-        }
-      }
-    } catch (e) {}
-  }
-
   // Filter out non-music items (podcasts, religious lectures, drama episodes, sports highlights, live streams)
   const musicOnly = candidates.filter(t => !isNonMusic(t, cleanQuery));
   const finalPool = musicOnly.length > 0 ? musicOnly : candidates;
 
-  // Rank tracks with intelligent music scoring algorithm
-  return rankTracks(finalPool, cleanQuery).slice(0, targetCount);
+  return finalPool.slice(0, targetCount);
 }
 
 export async function getVideoMetadata(videoId) {
