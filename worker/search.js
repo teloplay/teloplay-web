@@ -77,113 +77,134 @@ const OFFICIAL_CHANNEL_HINTS = [
   'Excel Entertainment',
 ];
 
-const COMPILATION_TITLE_PATTERNS = [
-  /\btop\s*\d+\b/i,
-  /\bbest\s+of\b/i,
-  /\ball\s+songs?\b/i,
-  /\bsongs?\s+list\b/i,
-  /\bsad\s+songs?\b/i,
-  /\bsad\s+status\b/i,
-  /\bromantic\s+songs?\b/i,
-  /\blove\s+songs?\b/i,
-  /\bnon[\s-]?stop\b/i,
-  /\bnonstop\b/i,
-  /\bju(ke|ke)box\b/i,
-  /\bunlimited\s+songs?\b/i,
-  /\b\d+\s*hours?\s+of\b/i,
-  /\b\d+\s*min(utes)?\s+of\b/i,
-  /\bvideo\s+jukebox\b/i,
-  /\baudio\s+ju(ke|ke)box\b/i,
-  /\bofficial\s+video\s+collection\b/i,
-  /\bhit(s)?\s+collection\b/i,
-  /\bgreatest\s+hit(s)?\b/i,
-  /\b\d+\s+best\b/i,
-  /\bmashup\b/i,
-  /\blofi\b/i,
-  /\bsleep\s+music\b/i,
-  /\bmeditation\b/i,
-  /\bblack\s+screen\b/i,
-  /\b8d\s+audio\b/i,
-  /\b\d+\s+songs?\s+of\b/i,
+export const NON_MUSIC_PATTERNS = [
+  /\b(?:part|episode|ep|eps)\s*\.?\s*\d+\b/i,
+  /#(?:arrangemarriage|lesbian|lovestory|drama|movie|shorts|vlog)\b/i,
+  /\b(?:quran|qur'aan|recitation|surah|tafsir|lecture|bayan|waz|khutbah|hadith|dars|sunnah|calamities|saut-ul-quran)\b/i,
+  /\b(?:live\s*stream|live\s*now|🔴|breaking\s*news|press\s*conference|partai|suksesi)\b/i,
+  /\b(?:full\s*movie|short\s*film|web\s*series|season\s*\d+)\b/i,
+  /\b(?:football|goals?|skills?\s*(?:&|and)\s*goals?|highlights?|tribute\s+to|nostalgia\s*l|match\s*highlights?)\b/i,
+  /\b(?:reaction|reacting|vlog)\b/i,
 ];
 
-const PLAYLIST_TITLE_HINTS = [
-  '| playlist', 'playlist |', '| mix', 'mix |', '| station', 'station |',
-  'radio |', '| radio', 'album |', '| album',
-];
-
-const COMPILATION_AUTHOR_HINTS = [
-  'songs collection', 'indian songs', 'hindi songs', 'tamil songs',
-  'telugu songs', 'sad songs', 'romantic songs', 'love songs',
-  'old songs', 'punjabi songs', 'bengali songs', 'all songs',
-  'jukebox', 'unlimited songs', 'hits collection',
-];
-
-function isCompilationTitle(title) {
-  if (!title) return false;
-  return COMPILATION_TITLE_PATTERNS.some((re) => re.test(title));
+export function isNonMusic(track, query) {
+  const text = ((track.title || '') + ' ' + (track.author || '')).toLowerCase();
+  const q = (query || '').toLowerCase();
+  for (const re of NON_MUSIC_PATTERNS) {
+    if (re.test(text)) {
+      const match = text.match(re);
+      if (match && q.includes(match[0].toLowerCase())) continue;
+      return true;
+    }
+  }
+  if (track.duration > 900 && !/\b(hour|loop|meditation|sleep|relax|jukebox)\b/i.test(q)) {
+    return true;
+  }
+  if (track.duration > 0 && track.duration < 40 && !/\b(ringtone|short|snippet|status)\b/i.test(q)) {
+    return true;
+  }
+  return false;
 }
 
-function isPlaylistTitle(title) {
-  if (!title) return false;
-  return PLAYLIST_TITLE_HINTS.some((hint) => title.toLowerCase().includes(hint));
+export function parseViews(str) {
+  if (!str) return 0;
+  const m = str.match(/^([\d\.]+)\s*([KMBkmb]|million|billion|thousand)?\s*(views|plays)?/i);
+  if (!m) return 0;
+  let val = parseFloat(m[1]);
+  const unit = (m[2] || '').toUpperCase();
+  if (unit === 'B' || unit === 'BILLION') val *= 1e9;
+  else if (unit === 'M' || unit === 'MILLION') val *= 1e6;
+  else if (unit === 'K' || unit === 'THOUSAND') val *= 1e3;
+  return val;
 }
 
-function isCompilationAuthor(author) {
-  if (!author) return false;
-  const a = String(author).toLowerCase().trim();
-  if (!a) return false;
-  if (a.includes(' - topic') || a.endsWith(' topic')) return true;
-  if (a.includes('vevo')) return true;
-  return COMPILATION_AUTHOR_HINTS.some((h) => a.includes(h));
+export function extractPlays(renderer) {
+  if (!renderer?.flexColumns) return 0;
+  for (const col of renderer.flexColumns) {
+    const runs = col?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || [];
+    for (const r of runs) {
+      const text = (r.text || '').trim();
+      if (/(\d+(\.\d+)?)\s*(K|M|B|million|billion|thousand)?\s*(views|plays)/i.test(text)) {
+        return parseViews(text);
+      }
+    }
+  }
+  return 0;
 }
 
-function isOfficialAuthor(author) {
-  if (!author || author === 'Unknown Artist') return false;
-  const a = String(author).trim();
-  return OFFICIAL_CHANNEL_HINTS.some((h) => a.toLowerCase().includes(h.toLowerCase()));
-}
+export function calculateScore(track, query) {
+  const title = (track.title || '').toLowerCase().trim();
+  const author = (track.author || '').toLowerCase().trim();
+  const q = (query || '').toLowerCase().trim();
+  const qEscaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  let s = 0;
 
-function trackPriority(track) {
-  if (!track) return 99;
-  const title = track.title || '';
-  const author = track.author || '';
-  const hasAlbum = !!(track.albumName && track.albumName.trim().length > 0);
-  const hasDuration = !!track.duration && track.duration > 0;
+  // 1. Title match relevance
+  const isExactTitle = title === q;
+  const isFromSoundtrack = new RegExp('^' + qEscaped + '\\s*\\((?:from|feat|with)\\b', 'i').test(title);
+  const isOfficialRelease = new RegExp('^' + qEscaped + '\\s*\\((?:official|original|audio|video)\\b', 'i').test(title);
 
-  if (isPlaylistTitle(title)) return 100;
-  if (isCompilationTitle(title)) return 80;
-  if (isCompilationAuthor(author) && !hasAlbum) return 70;
-
-  if (isOfficialAuthor(author)) {
-    if (hasAlbum && hasDuration) return 5;
-    if (hasDuration) return 10;
-    return 30;
+  if (isExactTitle || isFromSoundtrack || isOfficialRelease) {
+    s += 10000;
+  } else if (title.startsWith(q + ' (') || title.startsWith(q + ' -') || title.startsWith(q + ':')) {
+    s += 8000;
+  } else if (title.startsWith(q)) {
+    s += 6500;
+  } else if (new RegExp('\\b' + qEscaped + '\\b', 'i').test(title)) {
+    s += 4500;
+  } else if (title.includes(q)) {
+    s += 2000;
   }
 
-  if (hasAlbum && hasDuration) return 20;
-  if (hasDuration) return 40;
-  return 90;
+  // 2. Artist match relevance
+  if (author === q) {
+    s += 8000;
+  } else if (new RegExp('\\b' + qEscaped + '\\b', 'i').test(author) && !isExactTitle) {
+    s += 3000;
+  }
+
+  // 3. YouTube Music Top Result Card boost
+  if (track.fromCardShelf) s += 2500;
+
+  // 4. Official studio audio release (has album name)
+  if (track.albumName && track.albumName.trim().length > 0) s += 2000;
+
+  // 5. Normal song duration (60s to 480s)
+  if (track.duration >= 60 && track.duration <= 480) s += 1000;
+
+  // 6. Play count / popularity boost
+  if (track.plays && track.plays > 0) {
+    if (track.plays >= 50e6) s += 2500;
+    else if (track.plays >= 10e6) s += 2000;
+    else if (track.plays >= 1e6) s += 1200;
+    else if (track.plays >= 1e5) s += 600;
+    else if (track.plays >= 1e4) s += 200;
+  }
+
+  // 7. Official record labels / channels
+  const isOfficial = OFFICIAL_CHANNEL_HINTS.some(h => author.includes(h.toLowerCase())) ||
+    author.includes('vevo') || author.includes('- topic');
+  if (isOfficial) s += 1000;
+
+  // 8. Penalties for derivatives / secondary uploads
+  if (/\b(slowed|reverb|lofi|lo-fi|remix|bass boosted|8d audio|speed up|mashup)\b/i.test(title)) s -= 3500;
+  if (/\b(lyrics|lyrical|female version|male version|cover|acoustic version|unplugged)\b/i.test(title)) s -= 2000;
+  if (/\b(ringtone|status|bgm|instrumental)\b/i.test(title)) s -= 2500;
+  if (/\b(jukebox|top\s*\d+|best of|all songs|compilation|nonstop|non stop)\b/i.test(title)) s -= 4500;
+
+  // 9. Cleaner shorter title preference (tie-breaker)
+  s -= Math.min(title.length, 80) * 10;
+  return s;
 }
 
-function rankTracks(tracks, query) {
-  const q = (query || '').toLowerCase().trim();
-  return tracks.slice().sort((a, b) => {
-    const pa = trackPriority(a);
-    const pb = trackPriority(b);
-    if (pa !== pb) return pa - pb;
-    const la = (a.title || '').length;
-    const lb = (b.title || '').length;
-    if (la !== lb) return lb - la;
-    if (q) {
-      const ia = (a.title || '').toLowerCase().indexOf(q);
-      const ib = (b.title || '').toLowerCase().indexOf(q);
-      const sa = ia === -1 ? 9999 : ia;
-      const sb = ib === -1 ? 9999 : ib;
-      if (sa !== sb) return sa - sb;
-    }
-    return 0;
-  });
+export function rankTracks(tracks, query) {
+  return tracks.slice().sort((a, b) => calculateScore(b, query) - calculateScore(a, query));
+}
+
+// Back-compat: keep trackPriority exported in case other code uses it.
+export function trackPriority(track) {
+  if (!track) return 99;
+  return 50;
 }
 
 export function extractTrackInfo(flexColumns) {
@@ -325,6 +346,7 @@ export function rendererToTrack(renderer) {
 
   const info = extractTrackInfo(renderer.flexColumns || []);
   const thumbnail = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+  const plays = extractPlays(renderer);
 
   return {
     videoId,
@@ -333,6 +355,7 @@ export function rendererToTrack(renderer) {
     albumName: info.albumName || '',
     thumbnail,
     duration: info.duration,
+    plays,
   };
 }
 
@@ -345,6 +368,7 @@ export function cardShelfToTrack(item) {
   const subtitleGroups = item?.subtitle?.runs || [];
   const info = extractTrackInfo([{ musicResponsiveListItemFlexColumnRenderer: { text: { runs: titleRuns } } }, { musicResponsiveListItemFlexColumnRenderer: { text: { runs: subtitleGroups } } }]);
   const thumbnail = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+  const plays = extractPlays(item);
 
   return {
     videoId,
@@ -353,6 +377,8 @@ export function cardShelfToTrack(item) {
     albumName: info.albumName || '',
     thumbnail,
     duration: info.duration,
+    plays,
+    fromCardShelf: true,
   };
 }
 
@@ -446,7 +472,7 @@ function continuationTokens(json) {
     .filter(Boolean);
 }
 
-async function searchYouTubeMusicPages(query, visitorData, targetCount) {
+async function searchYouTubeMusicEndpoint(query, params, visitorData, continuation) {
   const context = {
     client: {
       clientName: 'WEB_REMIX',
@@ -462,50 +488,96 @@ async function searchYouTubeMusicPages(query, visitorData, targetCount) {
     'X-YouTube-Client-Name': '67',
     'X-YouTube-Client-Version': '1.20260114.01.00',
   };
-  const requestPage = async (body) => {
+  const body = continuation
+    ? { context, continuation }
+    : { context, query, ...(params ? { params } : {}) };
+
+  try {
     const response = await fetch('https://music.youtube.com/youtubei/v1/search?prettyPrint=false', {
-      method: 'POST', headers, body: JSON.stringify(body),
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
     });
-    return response.ok ? response.json() : null;
-  };
-
-  const firstPage = await requestPage({ context, query });
-  if (!firstPage) return [];
-
-  let tracks = tracksFromMusicResponse(firstPage);
-  let tokens = continuationTokens(firstPage);
-  // Fetch at most three additional pages. This keeps latency bounded while
-  // allowing the API's public limit of 100 results to be filled when available.
-  for (let page = 0; page < 3 && tracks.length < targetCount && tokens.length; page += 1) {
-    const token = tokens.shift();
-    const nextPage = await requestPage({ context, continuation: token });
-    if (!nextPage) continue;
-    tracks = [...tracks, ...tracksFromMusicResponse(nextPage)];
-    tokens = [...tokens, ...continuationTokens(nextPage)];
+    if (!response.ok) return { tracks: [], token: null };
+    const json = await response.json();
+    const tracks = tracksFromMusicResponse(json);
+    const token = continuationTokens(json)[0] || null;
+    return { tracks, token };
+  } catch (e) {
+    return { tracks: [], token: null };
   }
-  return tracks;
 }
 
 export async function searchYouTubeMusic(query, limit = 25) {
   const targetCount = Math.min(Math.max(limit, 1), 100);
+  const cleanQuery = (query || '').trim();
+  if (!cleanQuery) return [];
+
   const vd = await getVisitorData();
 
-  // Music search gives canonical songs/albums; WEB search supplements it with
-  // official music videos, uploads, live performances, and trending results.
-  // Both requests begin together, then Music pagination fills additional items.
-  const [musicResult, webResult] = await Promise.allSettled([
-    searchYouTubeMusicPages(query, vd, targetCount),
-    searchYouTubeWeb(query),
+  // Query YouTube Music in parallel:
+  // 1. "Songs" chip filter (EgWKAQIIAWoSEAkQAxAFEAQQChAQEBUQERAO) -> Pure studio tracks
+  // 2. Default search (no params) -> Captures Top Result Card shelf (musicCardShelfRenderer)
+  // 3. "Videos" chip filter (EgWKAQIQAWoSEAkQAxAFEAQQChAQEBUQERAO) -> Official music videos
+  const [songsRes, defaultRes, videosRes] = await Promise.allSettled([
+    searchYouTubeMusicEndpoint(cleanQuery, 'EgWKAQIIAWoSEAkQAxAFEAQQChAQEBUQERAO', vd),
+    searchYouTubeMusicEndpoint(cleanQuery, undefined, vd),
+    searchYouTubeMusicEndpoint(cleanQuery, 'EgWKAQIQAWoSEAkQAxAFEAQQChAQEBUQERAO', vd),
   ]);
 
-  const musicTracks = musicResult.status === 'fulfilled' ? musicResult.value : [];
-  const webTracks = webResult.status === 'fulfilled' ? webResult.value : [];
-  const tracks = [...musicTracks, ...webTracks];
-  const deduped = tracks.filter((track, index, list) =>
-    list.findIndex(item => item.videoId === track.videoId) === index
-  );
-  // Re-rank so official individual tracks come first, compilations/mixes last.
-  return rankTracks(deduped, query).slice(0, targetCount);
+  const songsTracks = songsRes.status === 'fulfilled' ? songsRes.value.tracks : [];
+  const defaultTracks = defaultRes.status === 'fulfilled' ? defaultRes.value.tracks : [];
+  const videosTracks = videosRes.status === 'fulfilled' ? videosRes.value.tracks : [];
+
+  // Put Songs first so rich metadata (duration, album name) takes precedence
+  let merged = [...songsTracks, ...defaultTracks, ...videosTracks];
+
+  // If user requested a large limit and continuation token is available, fetch next page
+  if (targetCount > 25 && defaultRes.status === 'fulfilled' && defaultRes.value.token) {
+    try {
+      const nextPage = await searchYouTubeMusicEndpoint(cleanQuery, undefined, vd, defaultRes.value.token);
+      if (nextPage.tracks.length > 0) {
+        merged.push(...nextPage.tracks);
+      }
+    } catch (e) {}
+  }
+
+  // Deduplicate by videoId while merging richer metadata (duration, albumName, plays, cardShelf)
+  const trackMap = new Map();
+  for (const t of merged) {
+    if (!t || !t.videoId) continue;
+    if (!trackMap.has(t.videoId)) {
+      trackMap.set(t.videoId, { ...t });
+    } else {
+      const existing = trackMap.get(t.videoId);
+      if (!existing.albumName && t.albumName) existing.albumName = t.albumName;
+      if ((!existing.duration || existing.duration === 0) && t.duration > 0) existing.duration = t.duration;
+      if ((!existing.plays || existing.plays === 0) && t.plays > 0) existing.plays = t.plays;
+      if (t.fromCardShelf) existing.fromCardShelf = true;
+    }
+  }
+
+  let candidates = Array.from(trackMap.values());
+
+  // If YouTube Music returned fewer than 5 tracks (e.g. extremely obscure query),
+  // supplement with YouTube Web search as a fallback
+  if (candidates.length < 5) {
+    try {
+      const webTracks = await searchYouTubeWeb(cleanQuery);
+      for (const wt of webTracks) {
+        if (!trackMap.has(wt.videoId)) {
+          candidates.push(wt);
+        }
+      }
+    } catch (e) {}
+  }
+
+  // Filter out non-music items (podcasts, religious lectures, drama episodes, sports highlights, live streams)
+  const musicOnly = candidates.filter(t => !isNonMusic(t, cleanQuery));
+  const finalPool = musicOnly.length > 0 ? musicOnly : candidates;
+
+  // Rank tracks with intelligent music scoring algorithm
+  return rankTracks(finalPool, cleanQuery).slice(0, targetCount);
 }
 
 export async function getVideoMetadata(videoId) {
