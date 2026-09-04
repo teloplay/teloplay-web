@@ -1,44 +1,27 @@
-# TeloPlay InnerTube Cloudflare Worker
+# TeloPlay Backend API (Render Web Service)
 
-## Live URL
+This directory contains the Node.js backend server powering **TeloPlay Web**, deployed on **Render Web Services**.
 
-`https://teloplay-stream-worker.teloplay-verify.workers.dev`
+- **Production URL**: `https://teloplay-web.onrender.com`
+- **Render Build Command**: `cd worker && npm install`
+- **Render Start Command**: `node worker/worker_runner.js`
+- **Port**: Dynamically bound via `process.env.PORT` (typically `10000` on Render)
 
-## Endpoints
+---
 
-- `GET /api/ping` - health check
-- `GET /api/search?q=arijit%20singh&limit=25` - YouTube Music search
-- `GET /api/suggest?q=arijit` - search suggestions
-- `GET /api/resolve?id=VIDEO_ID` - resolves a direct YouTube audio URL
-- `GET /api/stream/VIDEO_ID` - range-aware fallback proxy
-- `GET /api/errors` - recent in-memory errors for the current Worker isolate
+## Architecture & Stream Resolution
 
-## Deploy
+1. **`worker_runner.js`**: Node.js HTTP server wrapper for Render that translates incoming requests to standard Fetch API `Request`/`Response` and handles stream piping with backpressure management.
+2. **`worker.js`**: Router handling `/api/search`, `/api/resolve`, `/api/stream/:id`, `/api/suggest`, `/api/prewarm`.
+3. **`search.js`**: YouTube Music InnerTube search engine based on OpenTune (`musicCardShelfRenderer` for Top Result + `FILTER_SONG` + `FILTER_VIDEO`).
+4. **`stream.js`**: Exact audio stream resolver using multi-client direct YouTube player profiles (iOS, Android VR, Web, TV) with high-speed media CDN fallback and proxy streaming.
 
-From this directory:
+---
 
-```powershell
-npx wrangler deploy
+## Local Development
+
+```bash
+npm start
 ```
+Starts the server locally on `http://localhost:3000`.
 
-## Live terminal logs
-
-Run this in a separate terminal after deployment:
-
-```powershell
-npx wrangler tail teloplay-stream-worker --format pretty
-```
-
-Then use the app or call an endpoint. `console.log` entries are `INFO` lines and `console.error` entries are `ERROR` lines.
-
-The `/api/errors` endpoint is only a short in-memory ring buffer. Cloudflare Workers can use different isolates, so use `wrangler tail` for reliable live debugging.
-
-## Local API server
-
-For local development only:
-
-```powershell
-node server.js
-```
-
-It listens on `http://localhost:3000` and prints request/error logs in that terminal.
