@@ -82,6 +82,12 @@ GET /api/stream/:videoId
 - **Node.js Backpressure Piping**: Handled in `worker_runner.js` with `res.write` and `res.once('drain')` to ensure smooth streaming without memory leaks.
 - **Prewarming (`/api/prewarm`)**: Pre-resolves audio streams in the background when search results load, making first taps play instantly.
 
+### 4. Zero Server Bandwidth & Anti-Bot Strategy
+- **Direct CDN Client Streaming**: Audio links resolved from high-speed CDNs are routed directly to the client player, reducing Render egress bandwidth to near zero (saving the 5 GB free limit).
+- **In-Memory 24-Hour RAM Cache (`STREAM_CACHE`)**: Keeps resolved stream URLs cached in server RAM (`Map<string, StreamData>`) for 24 hours. Repeating searches or popular songs return in **0 ms** with zero CPU overhead.
+- **Background Prewarming (`/api/prewarm`)**: Automatically pre-resolves top search results and upcoming queue items in the background, making clicks feel instantaneous without triggering YouTube datacenter bot blocks.
+- **Keep-Alive Cron**: Render free instances are kept active 24/7 via regular cron ping intervals (e.g. every 10 mins), preserving in-memory cache and preventing cold starts.
+
 ---
 
 ## 📡 Backend API Endpoints (Render)
@@ -95,3 +101,8 @@ Base URL: `https://teloplay-web.onrender.com`
 - `GET /api/stream/:videoId` — Range-aware stream proxy for playback
 - `GET /api/prewarm?ids=:id1,:id2` — Prewarms audio cache for upcoming tracks
 - `GET /api/errors` — Server diagnostics and in-memory error logs
+- `GET /api/lyrics?id=:videoId&title=:title&artist=:artist&duration=:seconds` — Real-time synced LRC lyrics + official text lyrics
+- `GET /api/artist?id=:channelId` — Artist profile, bio, subscribers, and top songs
+- `GET /api/explore` / `GET /api/home` — Featured new releases, trending videos, and moods & genres
+- `GET /api/song?id=:videoId` — Song credits, artist bio, and related songs
+
