@@ -137,8 +137,17 @@ class ApiService {
         final data = jsonDecode(response.body);
         if (data['ok'] == true) {
           final provider = data['provider'] as String? ?? '';
-          // Always route via backend stream proxy to guarantee smooth buffering,
-          // zero CORS issues, and prevent the 2s audio pause/stutter.
+          final directUrl = data['url'] as String? ?? '';
+
+          // Zero-Bandwidth Optimization:
+          // If the resolved audio URL is a direct CDN/media URL (Paulin, Ricky, Savenow, etc.),
+          // play it directly on the client. Render consumes ZERO audio bandwidth!
+          // Only fallback to the backend stream proxy if direct URL is not available.
+          if (directUrl.isNotEmpty && !directUrl.contains('googlevideo.com')) {
+            _log('RESOLVE', 'OK: using direct stream (0 server bandwidth) ($provider) for $videoId');
+            return directUrl;
+          }
+
           final proxyUrl = '$_baseUrl/api/stream/$videoId';
           _log('RESOLVE', 'OK: using stream proxy $proxyUrl ($provider) for $videoId');
           return proxyUrl;
