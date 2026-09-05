@@ -1,5 +1,6 @@
 ﻿import { searchYouTubeMusic, getVisitorData } from './search.js';
 import { resolveStreamUrl, handleStreamProxy, STREAM_CACHE, prewarmStreamUrl } from './stream.js';
+import { getSongLyrics, getArtistDetails, getExplorePage, getSongDetails } from './metadata.js';
 
 const ERROR_LOG = [];
 const MAX_LOG = 50;
@@ -100,6 +101,43 @@ export default {
         if (!videoId) return jsonRes({ ok: false, error: 'Missing videoId' }, 400);
         return await handleStreamProxy(request, videoId, CORS);
       }
+      // ─── Rich Metadata & Lyrics Endpoints ──────────────────────────
+
+      // 1. Lyrics endpoint: returns both YouTube Music text lyrics and LRCLib Synced Lyrics
+      if (path === '/api/lyrics') {
+        const id = url.searchParams.get('id') || '';
+        const title = url.searchParams.get('title') || '';
+        const artist = url.searchParams.get('artist') || '';
+        const duration = parseInt(url.searchParams.get('duration') || '0', 10);
+        if (!id && (!title || !artist)) {
+          return jsonRes({ ok: false, error: 'Provide ?id= or ?title=&artist=' }, 400);
+        }
+        const lyrics = await getSongLyrics(id, title, artist, duration);
+        return jsonRes({ ok: true, ...lyrics });
+      }
+
+      // 2. Artist profile endpoint: bio, thumbnail, subscriber count, top songs & albums
+      if (path === '/api/artist') {
+        const id = url.searchParams.get('id') || '';
+        if (!id) return jsonRes({ ok: false, error: 'Missing ?id=' }, 400);
+        const artistData = await getArtistDetails(id);
+        return jsonRes({ ok: true, ...artistData });
+      }
+
+      // 3. Explore & New Releases: trending songs, new releases, moods & genres
+      if (path === '/api/explore' || path === '/api/home') {
+        const exploreData = await getExplorePage();
+        return jsonRes({ ok: true, ...exploreData });
+      }
+
+      // 4. Song Details: description, credits, year, related songs
+      if (path === '/api/song') {
+        const id = url.searchParams.get('id') || '';
+        if (!id) return jsonRes({ ok: false, error: 'Missing ?id=' }, 400);
+        const songData = await getSongDetails(id);
+        return jsonRes({ ok: true, ...songData });
+      }
+
 
       return jsonRes({ error: 'Not found' }, 404);
     } catch (e) {

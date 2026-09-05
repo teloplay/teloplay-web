@@ -309,11 +309,62 @@ export async function handleStreamProxy(request, videoId, corsHeaders = {}) {
       });
     }
 
+    const rangeHeader = request.headers.get('Range') || request.headers.get('range');
+    const totalLength = info.contentLength || 0;
+    const isGoogleVideo = info.url.includes('googlevideo.com');
+
+    // Handle GoogleVideo URL (requires bounded chunks; open-ended ranges return 403 Forbidden)
+    if (isGoogleVideo && totalLength > 0) {
+      let start = 0;
+      let end = totalLength - 1;
+
+      if (rangeHeader) {
+        const m = rangeHeader.match(/bytes=(\d+)-(\d*)/);
+        if (m) {
+          start = parseInt(m[1], 10);
+          if (m[2]) {
+            end = parseInt(m[2], 10);
+          } else {
+            // Unbounded range (e.g. bytes=0- or bytes=65536-)
+            // Serve in chunks of 1MB (1,048,576 bytes) so GoogleVideo returns 200/206 instead of 403
+            end = Math.min(start + 1048576 - 1, totalLength - 1);
+          }
+        }
+      } else {
+        // No range requested: default to first 1MB chunk
+        end = Math.min(1048575, totalLength - 1);
+      }
+
+      const chunkUrl = `${info.url}&range=${start}-${end}`;
+      const chunkRes = await fetch(chunkUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        },
+      });
+
+      if (!chunkRes.ok) {
+        return new Response(null, { status: chunkRes.status, headers: corsHeaders });
+      }
+
+      const chunkSize = end - start + 1;
+      const responseHeaders = new Headers(corsHeaders);
+      responseHeaders.set('Content-Type', info.mimeType || 'audio/mp4');
+      responseHeaders.set('Content-Length', chunkSize.toString());
+      responseHeaders.set('Content-Range', `bytes ${start}-${end}/${totalLength}`);
+      responseHeaders.set('Accept-Ranges', 'bytes');
+      responseHeaders.set('Cache-Control', 'public, max-age=86400');
+
+      return new Response(chunkRes.body, {
+        status: 206,
+        headers: responseHeaders,
+      });
+    }
+
+    // Standard media CDN / direct stream fallback
     const headers = new Headers({
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
     });
-    const range = request.headers.get('Range');
-    if (range) headers.set('Range', range);
+    if (rangeHeader) headers.set('Range', rangeHeader);
 
     const streamResponse = await fetch(info.url, { headers });
     const responseHeaders = new Headers(corsHeaders);
