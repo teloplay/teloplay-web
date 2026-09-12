@@ -23,7 +23,7 @@ A modern music streaming web application with Flutter Web frontend and a high-pe
        ┌────────────────────┴────────────────────┐
        ▼                                         ▼
 ┌───────────────────────────┐     ┌───────────────────────────┐
-│ YouTube Music InnerTube   │     │  Exact Stream Resolution  │
+│      Music InnerTube      │     │  Exact Stream Resolution  │
 │ (Songs, Videos, Top Card) │     │  (Direct Clients + Proxy) │
 └───────────────────────────┘     └───────────────────────────┘
 ```
@@ -41,14 +41,14 @@ A modern music streaming web application with Flutter Web frontend and a high-pe
 
 ---
 
-## 🔍 How Search Works (OpenTune / InnerTube Engine)
+## 🔍 How Search Works (InnerTube Engine)
 
-Search queries (e.g. `/api/search?q=safar&limit=25`) use YouTube Music's InnerTube API (`WEB_REMIX` client):
+Search queries (e.g. `/api/search?q=safar&limit=25`) use Music's InnerTube API (`WEB_REMIX` client):
 
 1. **Top Result Shelf (`musicCardShelfRenderer`)**:  
    Captures the canonical top result card from YouTube Music and places it at the very top.
 2. **Songs Filter (`FILTER_SONG` = `EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D`)**:  
-   Queries official studio audio tracks in their natural relevance order (identical to OpenTune / ViMusic).
+   Queries official studio audio tracks in their natural relevance order .
 3. **Videos Filter (`FILTER_VIDEO` = `EgWKAQIQAWoKEAkQChAFEAMQBA%3D%3D`)**:  
    Supplements songs with official music videos.
 4. **Non-Music Noise Elimination**:  
@@ -62,10 +62,10 @@ To provide instant, buffer-free, uninterrupted playback with zero CORS issues an
 
 ### 1. Multi-Client InnerTube Direct Audio Resolver (`tryDirectResolver`)
 The backend queries YouTube's player endpoint concurrently across multiple client profiles:
-- **iOS Client** (`com.google.ios.youtube`)
-- **Android VR Client** (`com.google.android.apps.youtube.vr.oculus`)
-- **Web Client** (`WEB`)
-- **TV Embedded Client** (`PlayStation / ATV`)
+- **iOS Client**
+- **Android VR Client** 
+- **Web Client** 
+- **TV Embedded Client** 
 - **visionOS Client**
 
 If a direct audio URL (ITAG 140 / 251) is resolved within milliseconds, it is returned immediately.
