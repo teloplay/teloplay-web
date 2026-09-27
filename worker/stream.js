@@ -7,6 +7,10 @@ import { Innertube, ClientType } from 'youtubei.js';
 
 export const STREAM_CACHE = new Map();
 export const IN_FLIGHT = new Map();
+// Short negative cache: don't hammer upstreams (rate-limit risk) when a
+// video is currently unresolvable. 60s only — outages shouldn't stick.
+const NEG_CACHE = new Map();
+const NEG_TTL_MS = 60_000;
 
 const CACHE_TTL_MS = 3 * 60 * 60 * 1000;
 
@@ -35,12 +39,18 @@ export async function resolveStreamUrl(videoId, meta = {}) {
     return { ...cached.data, cached: true };
   }
 
+  const neg = NEG_CACHE.get(videoId);
+  if (neg && Date.now() - neg.ts < NEG_TTL_MS) {
+    return { ok: false, error: neg.error, negativeCached: true };
+  }
+
   if (IN_FLIGHT.has(videoId)) {
     return IN_FLIGHT.get(videoId);
   }
 
   const promise = (async () => {
     let lastError = null;
+    let saavnReason = null;
 
     for (const clientType of CLIENT_CANDIDATES) {
       try {
@@ -82,13 +92,17 @@ export async function resolveStreamUrl(videoId, meta = {}) {
           STREAM_CACHE.set(videoId, { ts: Date.now(), data: saavn });
           return saavn;
         }
-      } catch {}
+        saavnReason = (saavn && saavn.reason) || 'unknown';
+      } catch (e) {
+        saavnReason = String((e && e.message) || e).slice(0, 60);
+      }
     }
 
-    return {
-      ok: false,
-      error: lastError ? 'Could not resolve stream for ' + videoId + ': ' + lastError : 'Could not resolve audio stream for ' + videoId,
-    };
+    const errText = 'Could not resolve stream for ' + videoId
+      + (lastError ? ' yt:' + String(lastError).slice(0, 100) : '')
+      + (saavnReason ? ' saavn:' + saavnReason : '');
+    NEG_CACHE.set(videoId, { ts: Date.now(), error: errText });
+    return { ok: false, error: errText };
   })();
 
   IN_FLIGHT.set(videoId, promise);
