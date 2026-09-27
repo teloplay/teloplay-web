@@ -46,39 +46,9 @@ export default {
       }
 
       if (path === '/api/diag') {
-        const id = url.searchParams.get('id') || 'zAiIgYOH4Ys';
-        const { tryDirectResolver, converterDebug } = await import('./stream.js');
-        const r = await tryDirectResolver(id);
-        return jsonRes({ ok: r.ok, provider: r.provider, attempts: r.attempts, converterDebug: converterDebug.lastInvalid });
-      }
-
-      // Temporary network diagnosis: which YouTube endpoints are reachable
-      // from this host, with timing + error type. Remove after debugging.
-      if (path === '/api/netprobe') {
-        const YT_UA = YT_HDRS['User-Agent'];
-        const id = url.searchParams.get('id') || 'BSJa1UytM8w';
-        const { YT_CLIENTS, probeClientDetailed } = await import('./stream.js');
-        const vd = await getVisitorData();
-        const out = { clients: [] };
-        for (const client of YT_CLIENTS) {
-          out.clients.push(await probeClientDetailed(client, id, vd));
-        }
-        // Control: search endpoint (known working) for comparison.
-        const t = Date.now();
-        try {
-          const ctl = new AbortController();
-          const to = setTimeout(() => ctl.abort(), 12000);
-          const res = await fetch('https://music.youtube.com/youtubei/v1/search?prettyPrint=false', {
-            method: 'POST', signal: ctl.signal,
-            headers: { 'Content-Type': 'application/json', Origin: 'https://music.youtube.com', 'User-Agent': YT_UA },
-            body: JSON.stringify({ context: { client: { clientName: 'WEB_REMIX', clientVersion: '1.20260114.01.00', gl: 'US', hl: 'en', visitorData: vd || undefined } }, query: 'test', params: 'EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D' }),
-          });
-          clearTimeout(to);
-          out.music_search = { ms: Date.now() - t, http: res.status };
-        } catch (e) {
-          out.music_search = { ms: Date.now() - t, error: e?.message || String(e) };
-        }
-        return jsonRes({ ok: true, out });
+        const id = url.searchParams.get('id') || 'kJQP7kiw5Fk';
+        const r = await resolveStreamUrl(id);
+        return jsonRes({ ok: r.ok, provider: r.provider, title: r.title, url: r.url });
       }
 
       if (path === '/api/errors') {
@@ -120,20 +90,14 @@ export default {
       if (path === '/api/resolve') {
         const id = url.searchParams.get('id') || url.searchParams.get('videoId') || '';
         if (!id) return jsonRes({ ok: false, error: 'Missing ?id=' }, 400);
-        // Title/artist/duration enable the Saavn high-quality fallback.
-        // The Flutter app sends combined ?q= (legacy); prefer explicit parts.
+        // Title/artist enable the Saavn fallback (app sends ?q= legacy).
         const meta = {
           title: url.searchParams.get('title') || url.searchParams.get('q') || '',
           artist: url.searchParams.get('artist') || '',
           duration: parseInt(url.searchParams.get('duration') || '0', 10),
         };
         const data = await resolveStreamUrl(id, meta);
-        // Converter (savenow) links are IP-locked: they serve audio to the
-        // server but HTML to end-user networks. Force those through our
-        // /api/stream proxy (verified: proxy returns 200 audio/mpeg) so the
-        // app never receives an unplayable direct link. Direct googlevideo
-        // URLs are untouched (no proxy bandwidth cost).
-        if (data.ok && data.provider === 'media_cdn_exact_video' && data.url) {
+        if (data.ok) {
           data.directUrl = data.url;
           data.url = `${url.origin}/api/stream/${encodeURIComponent(id)}`;
           data.proxied = true;
