@@ -4,6 +4,8 @@
  */
 
 import { Innertube, ClientType } from 'youtubei.js';
+import { trySaavnResolver } from './saavn.js';
+import { getVideoMetadata } from './search.js';
 
 export const STREAM_CACHE = new Map();
 export const IN_FLIGHT = new Map();
@@ -88,7 +90,7 @@ export async function resolveStreamUrl(videoId, meta = {}) {
 
     for (const clientType of CLIENT_CANDIDATES) {
       try {
-        const result = await attemptWithTimeout(clientType, 25000);
+        const result = await attemptWithTimeout(clientType, 4000);
         if (result) {
           STREAM_CACHE.set(videoId, { ts: Date.now(), data: result });
           return result;
@@ -98,6 +100,29 @@ export async function resolveStreamUrl(videoId, meta = {}) {
         innertubeInstances.delete(clientType);
       }
     }
+
+    // ── Tier 2: JioSaavn 320kbps Lossless Studio Fallback ───────────
+    try {
+      let title = meta.title || '';
+      let artist = meta.artist || '';
+      const duration = meta.duration || 0;
+
+      if (!title) {
+        const oembed = await getVideoMetadata(videoId);
+        if (oembed) {
+          title = oembed.title;
+          artist = oembed.author;
+        }
+      }
+
+      if (title) {
+        const saavnRes = await trySaavnResolver(title, artist, duration);
+        if (saavnRes && saavnRes.ok && saavnRes.url) {
+          STREAM_CACHE.set(videoId, { ts: Date.now(), data: saavnRes });
+          return saavnRes;
+        }
+      }
+    } catch (e) {}
 
     const errText = 'Could not resolve stream for ' + videoId
       + (lastError ? ': ' + String(lastError).slice(0, 120) : '');

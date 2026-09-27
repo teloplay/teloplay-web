@@ -90,10 +90,13 @@ export default {
       if (path === '/api/resolve') {
         const id = url.searchParams.get('id') || url.searchParams.get('videoId') || '';
         if (!id) return jsonRes({ ok: false, error: 'Missing ?id=' }, 400);
-        const data = await resolveStreamUrl(id);
-        // Proxy IP-locked converter links; direct googlevideo/youtubei URLs
-        // play fine from user networks (proxying those wastes bandwidth).
-        if (data.ok && data.provider === 'media_cdn_exact_video' && data.url) {
+        const meta = {
+          title: url.searchParams.get('title') || url.searchParams.get('q') || '',
+          artist: url.searchParams.get('artist') || '',
+          duration: parseInt(url.searchParams.get('duration') || '0', 10),
+        };
+        const data = await resolveStreamUrl(id, meta);
+        if (data.ok && data.url && data.url.includes('googlevideo.com')) {
           data.directUrl = data.url;
           data.url = `${url.origin}/api/stream/${encodeURIComponent(id)}`;
           data.proxied = true;
