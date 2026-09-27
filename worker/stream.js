@@ -10,8 +10,37 @@ export const STREAM_CACHE = new Map();
 export const IN_FLIGHT = new Map();
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const RESOLVE_TIMEOUT_MS = 5_000;
+// Datacenter IPs stall youtubei instead of failing fast — 3.5s is enough,
+// all clients run in parallel so this bounds the direct phase.
+const RESOLVE_TIMEOUT_MS = 3_500;
 const CONVERTER_TIMEOUT_MS = 25_000;
+const PROBE_TIMEOUT_MS = 8_000;
+const CACHE_REVALIDATE_AFTER_MS = 60_000;
+
+const PROBE_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+
+/**
+ * Liveness probe for a resolved stream URL. Converter links die fast
+ * (minutes) and must never be served/cached dead: a dead link returns
+ * an HTML page instead of audio.
+ * Alive = HTTP 206, or HTTP 200 with an audio/* content-type.
+ */
+export async function validateStreamUrl(url, timeoutMs = PROBE_TIMEOUT_MS) {
+  if (!url || typeof url !== 'string' || !url.startsWith('http')) return false;
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      signal: timeoutSignal(timeoutMs),
+      headers: { 'User-Agent': PROBE_UA, Range: 'bytes=0-1023' },
+    });
+    if (res.status === 206) { try { res.body?.cancel(); } catch {} return true; }
+    const ct = (res.headers.get('content-type') || '').toLowerCase();
+    try { res.body?.cancel(); } catch {}
+    return res.status === 200 && ct.startsWith('audio/');
+  } catch {
+    return false;
+  }
+}
 
 const YT_CLIENTS = [
   // Bot-resistant clients first (exact fingerprints from the Innertube
@@ -278,6 +307,10 @@ export async function tryMediaCdnResolver(videoId) {
       if (!progressResponse.ok) continue;
       const progress = await progressResponse.json();
       if (progress.success === 1 && progress.download_url) {
+        // Links die fast — verify it serves audio before accepting.
+        // A dead link returns an HTML page and must never reach the app.
+        const alive = await validateStreamUrl(progress.download_url);
+        if (!alive) return null;
         return {
           ok: true,
           provider: 'media_cdn_exact_video',
@@ -300,7 +333,17 @@ export async function resolveStreamUrl(videoId) {
 
   const cached = STREAM_CACHE.get(videoId);
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
-    return { ...cached.data, cached: true };
+    // Links expire (converter: minutes, googlevideo: ~6h). Re-probe links
+    // older than a minute; evict + re-resolve instead of serving dead audio.
+    const age = Date.now() - cached.ts;
+    if (age < CACHE_REVALIDATE_AFTER_MS) {
+      return { ...cached.data, cached: true };
+    }
+    const alive = await validateStreamUrl(cached.data?.url, 4_000);
+    if (alive) {
+      return { ...cached.data, cached: true };
+    }
+    STREAM_CACHE.delete(videoId);
   }
 
   if (IN_FLIGHT.has(videoId)) {
