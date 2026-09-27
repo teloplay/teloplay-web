@@ -121,8 +121,9 @@ export default {
         const id = url.searchParams.get('id') || url.searchParams.get('videoId') || '';
         if (!id) return jsonRes({ ok: false, error: 'Missing ?id=' }, 400);
         // Title/artist/duration enable the Saavn high-quality fallback.
+        // The Flutter app sends combined ?q= (legacy); prefer explicit parts.
         const meta = {
-          title: url.searchParams.get('title') || '',
+          title: url.searchParams.get('title') || url.searchParams.get('q') || '',
           artist: url.searchParams.get('artist') || '',
           duration: parseInt(url.searchParams.get('duration') || '0', 10),
         };
