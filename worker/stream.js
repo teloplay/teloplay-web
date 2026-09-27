@@ -413,7 +413,7 @@ export async function tryMediaCdnResolver(videoId) {
   return null;
 }
 
-export async function resolveStreamUrl(videoId) {
+export async function resolveStreamUrl(videoId, meta = {}) {
   if (!videoId) return { ok: false, error: 'Missing videoId' };
 
   const cached = STREAM_CACHE.get(videoId);
@@ -450,6 +450,17 @@ export async function resolveStreamUrl(videoId) {
       const { attempts, ...payload } = directFast;
       STREAM_CACHE.set(videoId, { ts: Date.now(), data: payload });
       return payload;
+    }
+
+    // Saavn fallback BEFORE the slow converter: fast (~1-2s), 320kbps,
+    // covers mainstream catalog. Needs title/artist from the caller.
+    if (meta.title) {
+      const { trySaavnResolver } = await import('./saavn.js');
+      const saavn = await trySaavnResolver(meta.title, meta.artist || '', Number(meta.duration || 0));
+      if (saavn?.ok) {
+        STREAM_CACHE.set(videoId, { ts: Date.now(), data: saavn });
+        return saavn;
+      }
     }
 
     // Otherwise, wait for the converter (which was already launched at t=0).

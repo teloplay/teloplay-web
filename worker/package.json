@@ -14,6 +14,8 @@
   },
   "dependencies": {
     "@distube/ytdl-core": "^4.16.12",
-    "play-dl": "^1.9.7"
+    "node-forge": "^1.4.0",
+    "play-dl": "^1.9.7",
+    "youtubei.js": "^18.1.0"
   }
 }

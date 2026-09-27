@@ -120,7 +120,13 @@ export default {
       if (path === '/api/resolve') {
         const id = url.searchParams.get('id') || url.searchParams.get('videoId') || '';
         if (!id) return jsonRes({ ok: false, error: 'Missing ?id=' }, 400);
-        const data = await resolveStreamUrl(id);
+        // Title/artist/duration enable the Saavn high-quality fallback.
+        const meta = {
+          title: url.searchParams.get('title') || '',
+          artist: url.searchParams.get('artist') || '',
+          duration: parseInt(url.searchParams.get('duration') || '0', 10),
+        };
+        const data = await resolveStreamUrl(id, meta);
         // Converter (savenow) links are IP-locked: they serve audio to the
         // server but HTML to end-user networks. Force those through our
         // /api/stream proxy (verified: proxy returns 200 audio/mpeg) so the
