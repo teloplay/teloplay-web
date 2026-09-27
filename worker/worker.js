@@ -92,6 +92,16 @@ export default {
         const id = url.searchParams.get('id') || url.searchParams.get('videoId') || '';
         if (!id) return jsonRes({ ok: false, error: 'Missing ?id=' }, 400);
         const data = await resolveStreamUrl(id);
+        // Converter (savenow) links are IP-locked: they serve audio to the
+        // server but HTML to end-user networks. Force those through our
+        // /api/stream proxy (verified: proxy returns 200 audio/mpeg) so the
+        // app never receives an unplayable direct link. Direct googlevideo
+        // URLs are untouched (no proxy bandwidth cost).
+        if (data.ok && data.provider === 'media_cdn_exact_video' && data.url) {
+          data.directUrl = data.url;
+          data.url = `${url.origin}/api/stream/${encodeURIComponent(id)}`;
+          data.proxied = true;
+        }
         logInfo('/api/resolve', `${data.ok ? data.provider : data.error} in ${Date.now() - t0}ms`);
         return jsonRes(data);
       }
