@@ -7,6 +7,7 @@
  */
 
 import { Innertube, ClientType } from 'youtubei.js';
+import { getVisitorData } from './search.js';
 
 export const STREAM_CACHE = new Map();
 export const IN_FLIGHT = new Map();
@@ -20,7 +21,11 @@ async function getInnertubeInstance(clientType = ClientType.VISIONOS) {
   if (innertubeInstances.has(clientType)) {
     return innertubeInstances.get(clientType);
   }
-  const yt = await Innertube.create({ client_type: clientType });
+  const vd = await getVisitorData();
+  const yt = await Innertube.create({
+    client_type: clientType,
+    visitor_data: vd || undefined,
+  });
   innertubeInstances.set(clientType, yt);
   return yt;
 }
