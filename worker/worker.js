@@ -97,7 +97,11 @@ export default {
           duration: parseInt(url.searchParams.get('duration') || '0', 10),
         };
         const data = await resolveStreamUrl(id, meta);
-        if (data.ok) {
+        // Proxy ONLY IP-locked converter links (they serve HTML outside the
+        // server network). Saavn CDN + googlevideo play fine directly from
+        // user networks AND the media host stalls server-side fetches —
+        // proxying those would break + waste bandwidth.
+        if (data.ok && data.provider === 'media_cdn_exact_video' && data.url) {
           data.directUrl = data.url;
           data.url = `${url.origin}/api/stream/${encodeURIComponent(id)}`;
           data.proxied = true;
