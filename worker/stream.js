@@ -1,20 +1,18 @@
 /**
  * Exact YouTube Audio Stream Resolver & Proxy for TeloPlay Backend
- * Powered by InnerTube engine (VISIONOS / ANDROID_VR / IOS)
+ * Pure YouTube Resolution Pipeline:
+ * Tier 1: Direct InnerTube Resolver (VISIONOS / ANDROID_VR / IOS)
+ * Tier 2: Exact-Video Media CDN Converter (loader.to -> savenow.to exact MP3/M4A)
+ * ZERO track substitution — every stream is the exact YouTube video requested.
  */
 
 import { Innertube, ClientType } from 'youtubei.js';
-import { trySaavnResolver } from './saavn.js';
-import { getVideoMetadata } from './search.js';
 
 export const STREAM_CACHE = new Map();
 export const IN_FLIGHT = new Map();
-// Short negative cache: don't hammer upstreams (rate-limit risk) when a
-// video is currently unresolvable. 60s only — outages shouldn't stick.
 const NEG_CACHE = new Map();
 const NEG_TTL_MS = 60_000;
-
-const CACHE_TTL_MS = 3 * 60 * 60 * 1000;
+const CACHE_TTL_MS = 3 * 60 * 60 * 1000; // 3 hours
 
 const innertubeInstances = new Map();
 
@@ -33,7 +31,60 @@ const CLIENT_CANDIDATES = [
   ClientType.IOS,
 ];
 
-export async function resolveStreamUrl(videoId, meta = {}) {
+/**
+ * Exact-Video Media CDN Converter (loader.to -> savenow.to).
+ * Resolves the exact YouTube video ID without substitution.
+ */
+export async function tryMediaCdnResolver(videoId, timeoutMs = 28000) {
+  try {
+    const sourceUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+    const initUrl = `https://loader.to/ajax/download.php?button=1&start=1&end=1&format=mp3&url=${encodeURIComponent(sourceUrl)}`;
+    const initResponse = await fetch(initUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+        'Referer': 'https://loader.to/',
+        'Accept': 'application/json, text/plain, */*',
+      },
+    });
+    if (!initResponse.ok) return null;
+
+    const init = await initResponse.json();
+    const progressUrl = init.progress_url ||
+      (init.id ? `https://lto2.affadaffa.com/api/progress?id=${encodeURIComponent(init.id)}` : null);
+    if (!progressUrl) return null;
+
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      const progressResponse = await fetch(progressUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Referer': 'https://loader.to/',
+        },
+      });
+      if (!progressResponse.ok) continue;
+      const progress = await progressResponse.json();
+      if (progress.success === 1 && progress.download_url) {
+        return {
+          ok: true,
+          provider: 'media_cdn_exact_video',
+          url: progress.download_url,
+          mimeType: 'audio/mpeg',
+          format: 'mp3',
+          bitrate: 192000,
+          title: progress.title || init.title || 'Audio Track',
+          author: 'YouTube Audio',
+        };
+      }
+      if (String(progress.text || '').toLowerCase().includes('error')) return null;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+export async function resolveStreamUrl(videoId) {
   if (!videoId) return { ok: false, error: 'Missing videoId' };
 
   const cached = STREAM_CACHE.get(videoId);
@@ -53,8 +104,6 @@ export async function resolveStreamUrl(videoId, meta = {}) {
   const promise = (async () => {
     let lastError = null;
 
-    // One client attempt with a hard timeout — youtubei calls can hang
-    // for minutes behind IP-based bot checks; never let one stall resolve.
     async function attemptWithTimeout(clientType, ms) {
       let timer = null;
       try {
@@ -88,42 +137,29 @@ export async function resolveStreamUrl(videoId, meta = {}) {
       }
     }
 
-    // 1. Try primary InnerTube (VISIONOS) with 2.5s timeout
-    try {
-      const result = await attemptWithTimeout(ClientType.VISIONOS, 2500);
-      if (result) {
-        STREAM_CACHE.set(videoId, { ts: Date.now(), data: result });
-        return result;
-      }
-    } catch (err) {
-      lastError = (err && err.message) || String(err);
-      innertubeInstances.delete(ClientType.VISIONOS);
+    // Launch direct InnerTube (VISIONOS) and exact Media CDN concurrently
+    const directPromise = attemptWithTimeout(ClientType.VISIONOS, 3500);
+    const cdnPromise = tryMediaCdnResolver(videoId, 28000);
+
+    // Fast path: if direct YouTube stream resolves within 2.5s, use it!
+    const directFast = await Promise.race([
+      directPromise,
+      new Promise((resolve) => setTimeout(() => resolve(null), 2500)),
+    ]);
+
+    if (directFast) {
+      STREAM_CACHE.set(videoId, { ts: Date.now(), data: directFast });
+      return directFast;
     }
 
-    // 2. Immediate Tier-2 Fallback: JioSaavn 320kbps Studio Audio (fast & datacenter unblocked)
-    try {
-      let title = meta.title || '';
-      let artist = meta.artist || '';
-      const duration = meta.duration || 0;
+    // Secondary path: wait for exact Media CDN converter
+    const converter = await cdnPromise;
+    if (converter?.ok) {
+      STREAM_CACHE.set(videoId, { ts: Date.now(), data: converter });
+      return converter;
+    }
 
-      if (!title) {
-        const oembed = await getVideoMetadata(videoId);
-        if (oembed) {
-          title = oembed.title;
-          artist = oembed.author;
-        }
-      }
-
-      if (title) {
-        const saavnRes = await trySaavnResolver(title, artist, duration);
-        if (saavnRes && saavnRes.ok && saavnRes.url) {
-          STREAM_CACHE.set(videoId, { ts: Date.now(), data: saavnRes });
-          return saavnRes;
-        }
-      }
-    } catch (e) {}
-
-    // 3. If Saavn didn't match, try secondary YouTube clients (ANDROID_VR, IOS)
+    // If converter failed, try secondary YouTube clients (ANDROID_VR, IOS)
     for (const clientType of [ClientType.ANDROID_VR, ClientType.IOS]) {
       try {
         const result = await attemptWithTimeout(clientType, 2500);
@@ -137,7 +173,7 @@ export async function resolveStreamUrl(videoId, meta = {}) {
       }
     }
 
-    const errText = 'Could not resolve stream for ' + videoId
+    const errText = 'Could not resolve exact YouTube stream for ' + videoId
       + (lastError ? ': ' + String(lastError).slice(0, 120) : '');
     NEG_CACHE.set(videoId, { ts: Date.now(), error: errText });
     return { ok: false, error: errText };
@@ -163,8 +199,12 @@ export async function handleStreamProxy(request, videoId, corsHeaders = {}) {
 
     const rangeHeader = request.headers.get('Range') || request.headers.get('range');
     const upstreamHeaders = {
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
     };
+
+    if (info.provider === 'media_cdn_exact_video') {
+      upstreamHeaders['Referer'] = 'https://loader.to/';
+    }
 
     if (rangeHeader) {
       upstreamHeaders['Range'] = rangeHeader;
@@ -179,6 +219,9 @@ export async function handleStreamProxy(request, videoId, corsHeaders = {}) {
       STREAM_CACHE.delete(videoId);
       const freshInfo = await resolveStreamUrl(videoId);
       if (freshInfo.ok && freshInfo.url) {
+        if (freshInfo.provider === 'media_cdn_exact_video') {
+          upstreamHeaders['Referer'] = 'https://loader.to/';
+        }
         const retryRes = await fetch(freshInfo.url, {
           method: 'GET',
           headers: upstreamHeaders,
