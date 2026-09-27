@@ -92,10 +92,10 @@ export default {
         if (!id) return jsonRes({ ok: false, error: 'Missing ?id=' }, 400);
         const data = await resolveStreamUrl(id);
         const resPayload = { ...data };
+        // Zero-Bandwidth Direct Stream: Deliver direct CDN URL to client (0 Render bandwidth)
         if (resPayload.ok && resPayload.url) {
           resPayload.directUrl = resPayload.url;
-          resPayload.url = `${url.origin}/api/stream/${encodeURIComponent(id)}`;
-          resPayload.proxied = true;
+          resPayload.proxied = false;
         }
         logInfo('/api/resolve', `${resPayload.ok ? resPayload.provider : resPayload.error} in ${Date.now() - t0}ms`);
         return jsonRes(resPayload);
