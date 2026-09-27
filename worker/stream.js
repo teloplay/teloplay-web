@@ -42,7 +42,7 @@ export async function validateStreamUrl(url, timeoutMs = PROBE_TIMEOUT_MS) {
   }
 }
 
-const YT_CLIENTS = [
+export const YT_CLIENTS = [
   // Bot-resistant clients first (exact fingerprints from the Innertube
   // library the native Android/Windows engines use). These return
   // streamingData on datacenter IPs where ios/web get LOGIN_REQUIRED.
@@ -257,6 +257,65 @@ async function tryClientResolver(client, videoId, visitorData) {
     };
   } catch (error) {
     return { ok: false, ms: Date.now() - start, reason: error?.message || 'error' };
+  }
+}
+
+/**
+ * Detailed single-client probe (diagnostics): full HTTP status,
+ * playability and audio-URL count with a generous timeout so slow
+ * bot-check 403 pages are observed instead of aborted.
+ */
+export async function probeClientDetailed(client, videoId, visitorData, timeoutMs = 15000) {
+  const start = Date.now();
+  try {
+    const response = await fetch(
+      'https://www.youtube.com/youtubei/v1/player?prettyPrint=false',
+      {
+        method: 'POST',
+        signal: timeoutSignal(timeoutMs),
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': client.userAgent,
+          'X-YouTube-Client-Name': client.clientName,
+          'X-YouTube-Client-Version': client.clientVersion,
+          'Origin': client.origin,
+          'Referer': client.referer,
+        },
+        body: JSON.stringify({
+          context: {
+            client: {
+              clientName: client.clientName,
+              clientVersion: client.clientVersion,
+              deviceMake: client.deviceMake,
+              deviceModel: client.deviceModel,
+              osName: client.osName,
+              osVersion: client.osVersion,
+              gl: 'US',
+              hl: 'en',
+              visitorData: visitorData || undefined,
+            },
+          },
+          videoId,
+        }),
+      },
+    );
+    const ms = Date.now() - start;
+    if (!response.ok) {
+      const text = (await response.text()).slice(0, 60).replace(/\s+/g, ' ');
+      return { client: client.name, ms, http: response.status, text };
+    }
+    const json = await response.json();
+    const af = [
+      ...(json.streamingData?.adaptiveFormats || []),
+      ...(json.streamingData?.formats || []),
+    ].filter((f) => (f.mimeType || '').startsWith('audio/') && typeof f.url === 'string');
+    return {
+      client: client.name, ms, http: response.status,
+      playability: json.playabilityStatus?.status, audioUrls: af.length,
+      itag: af.find((f) => f.itag === 140)?.itag || af.find((f) => f.itag === 251)?.itag || af[0]?.itag || null,
+    };
+  } catch (error) {
+    return { client: client.name, ms: Date.now() - start, error: error?.message || 'error' };
   }
 }
 

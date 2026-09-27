@@ -57,40 +57,12 @@ export default {
       if (path === '/api/netprobe') {
         const YT_UA = YT_HDRS['User-Agent'];
         const id = url.searchParams.get('id') || 'BSJa1UytM8w';
-        const out = {};
-        async function timedFetch(label, target, body) {
-          const t = Date.now();
-          try {
-            const ctl = new AbortController();
-            const to = setTimeout(() => ctl.abort(), 12000);
-            const res = await fetch(target, {
-              method: 'POST',
-              signal: ctl.signal,
-              headers: { 'Content-Type': 'application/json', Origin: 'https://music.youtube.com', 'User-Agent': YT_UA },
-              body: JSON.stringify(body),
-            });
-            clearTimeout(to);
-            const ms = Date.now() - t;
-            let extra = { http: res.status };
-            if (res.ok) {
-              const j = await res.json();
-              const af = [...(j.streamingData?.adaptiveFormats || [])].filter(
-                (f) => (f.mimeType || '').startsWith('audio/') && typeof f.url === 'string',
-              );
-              extra = { http: res.status, playability: j.playabilityStatus?.status, audioUrls: af.length };
-            } else {
-              extra.text = (await res.text()).slice(0, 80);
-            }
-            out[label] = { ms, ...extra };
-          } catch (e) {
-            out[label] = { ms: Date.now() - t, error: e?.message || String(e) };
-          }
-        }
+        const { YT_CLIENTS, probeClientDetailed } = await import('./stream.js');
         const vd = await getVisitorData();
-        const base = (name, ver) => ({ context: { client: { clientName: name, clientVersion: ver, gl: 'US', hl: 'en', visitorData: vd || undefined } }, videoId: id });
-        await timedFetch('www_ios', 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false', base('IOS', '19.29.1'));
-        await timedFetch('music_remix', 'https://music.youtube.com/youtubei/v1/player?prettyPrint=false', base('WEB_REMIX', '1.20260114.01.00'));
-        await timedFetch('www_web', 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false', base('WEB', '2.20260114.00.00'));
+        const out = { clients: [] };
+        for (const client of YT_CLIENTS) {
+          out.clients.push(await probeClientDetailed(client, id, vd));
+        }
         // Control: search endpoint (known working) for comparison.
         const t = Date.now();
         try {
