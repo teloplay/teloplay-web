@@ -83,6 +83,9 @@ export async function resolveStreamUrl(videoId, meta = {}) {
       }
     }
 
+    const errText = 'Could not resolve stream for ' + videoId
+      + (lastError ? ': ' + String(lastError).slice(0, 120) : '');
+    NEG_CACHE.set(videoId, { ts: Date.now(), error: errText });
     return { ok: false, error: errText };
   })();
 
