@@ -4,7 +4,12 @@ import worker from './worker.js';
 const PORT = process.env.PORT || 3000;
 
 const server = http.createServer(async (req, res) => {
-  const url = `http://${req.headers.host}${req.url}`;
+  // Render terminates TLS at its edge proxy and forwards plain HTTP.
+  // Respect X-Forwarded-Proto so generated URLs (e.g. /api/stream proxy
+  // links in /api/resolve) keep the client's https scheme — otherwise
+  // browsers block the http audio as mixed content and playback dies.
+  const proto = req.headers['x-forwarded-proto'] || 'http';
+  const url = `${proto}://${req.headers.host}${req.url}`;
   
   const headers = new Headers();
   for (const [k, v] of Object.entries(req.headers)) {
