@@ -50,7 +50,6 @@ export async function resolveStreamUrl(videoId, meta = {}) {
 
   const promise = (async () => {
     let lastError = null;
-    let saavnReason = null;
 
     for (const clientType of CLIENT_CANDIDATES) {
       try {
@@ -84,24 +83,6 @@ export async function resolveStreamUrl(videoId, meta = {}) {
       }
     }
 
-    if (meta.title) {
-      try {
-        const { trySaavnResolver } = await import('./saavn.js');
-        const saavn = await trySaavnResolver(meta.title, meta.artist || '', Number(meta.duration || 0));
-        if (saavn && saavn.ok) {
-          STREAM_CACHE.set(videoId, { ts: Date.now(), data: saavn });
-          return saavn;
-        }
-        saavnReason = (saavn && saavn.reason) || 'unknown';
-      } catch (e) {
-        saavnReason = String((e && e.message) || e).slice(0, 60);
-      }
-    }
-
-    const errText = 'Could not resolve stream for ' + videoId
-      + (lastError ? ' yt:' + String(lastError).slice(0, 100) : '')
-      + (saavnReason ? ' saavn:' + saavnReason : '');
-    NEG_CACHE.set(videoId, { ts: Date.now(), error: errText });
     return { ok: false, error: errText };
   })();
 

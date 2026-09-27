@@ -90,17 +90,9 @@ export default {
       if (path === '/api/resolve') {
         const id = url.searchParams.get('id') || url.searchParams.get('videoId') || '';
         if (!id) return jsonRes({ ok: false, error: 'Missing ?id=' }, 400);
-        // Title/artist enable the Saavn fallback (app sends ?q= legacy).
-        const meta = {
-          title: url.searchParams.get('title') || url.searchParams.get('q') || '',
-          artist: url.searchParams.get('artist') || '',
-          duration: parseInt(url.searchParams.get('duration') || '0', 10),
-        };
-        const data = await resolveStreamUrl(id, meta);
-        // Proxy ONLY IP-locked converter links (they serve HTML outside the
-        // server network). Saavn CDN + googlevideo play fine directly from
-        // user networks AND the media host stalls server-side fetches —
-        // proxying those would break + waste bandwidth.
+        const data = await resolveStreamUrl(id);
+        // Proxy IP-locked converter links; direct googlevideo/youtubei URLs
+        // play fine from user networks (proxying those wastes bandwidth).
         if (data.ok && data.provider === 'media_cdn_exact_video' && data.url) {
           data.directUrl = data.url;
           data.url = `${url.origin}/api/stream/${encodeURIComponent(id)}`;
