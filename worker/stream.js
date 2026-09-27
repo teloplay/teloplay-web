@@ -51,16 +51,19 @@ export async function resolveStreamUrl(videoId, meta = {}) {
   const promise = (async () => {
     let lastError = null;
 
-    for (const clientType of CLIENT_CANDIDATES) {
+    // One client attempt with a hard timeout — youtubei calls can hang
+    // for minutes behind IP-based bot checks; never let one stall resolve.
+    async function attemptWithTimeout(clientType, ms) {
+      let timer = null;
       try {
-        const yt = await getInnertubeInstance(clientType);
-        const info = await yt.getBasicInfo(videoId);
-        const format = info.chooseFormat({ type: 'audio', quality: 'best' });
-        if (!format) continue;
-
-        const streamUrl = await format.decipher(yt.session.player);
-        if (streamUrl && typeof streamUrl === 'string' && streamUrl.startsWith('http')) {
-          const result = {
+        const task = (async () => {
+          const yt = await getInnertubeInstance(clientType);
+          const info = await yt.getBasicInfo(videoId);
+          const format = info.chooseFormat({ type: 'audio', quality: 'best' });
+          if (!format) return null;
+          const streamUrl = await format.decipher(yt.session.player);
+          if (!streamUrl || typeof streamUrl !== 'string' || !streamUrl.startsWith('http')) return null;
+          return {
             ok: true,
             provider: 'innertube_' + clientType.toLowerCase(),
             url: streamUrl,
@@ -73,12 +76,25 @@ export async function resolveStreamUrl(videoId, meta = {}) {
             title: info.basic_info.title || 'Unknown',
             author: info.basic_info.author || 'Unknown',
           };
+        })();
+        const timeout = new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('client-timeout')), ms);
+        });
+        return await Promise.race([task, timeout]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    }
 
+    for (const clientType of CLIENT_CANDIDATES) {
+      try {
+        const result = await attemptWithTimeout(clientType, 25000);
+        if (result) {
           STREAM_CACHE.set(videoId, { ts: Date.now(), data: result });
           return result;
         }
       } catch (err) {
-        lastError = err?.message || String(err);
+        lastError = (err && err.message) || String(err);
         innertubeInstances.delete(clientType);
       }
     }
