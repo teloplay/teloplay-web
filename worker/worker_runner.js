@@ -30,8 +30,6 @@ const server = http.createServer(async (req, res) => {
     for (const [k, v] of workerResponse.headers.entries()) {
       res.setHeader(k, v);
     }
-    // Do not leak upstream/internal diagnostics through server headers.
-    res.removeHeader('server');
 
     if (workerResponse.body) {
       try {
