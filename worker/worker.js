@@ -47,9 +47,9 @@ export default {
 
       if (path === '/api/diag') {
         const id = url.searchParams.get('id') || 'zAiIgYOH4Ys';
-        const { tryDirectResolver } = await import('./stream.js');
+        const { tryDirectResolver, converterDebug } = await import('./stream.js');
         const r = await tryDirectResolver(id);
-        return jsonRes({ ok: r.ok, provider: r.provider, attempts: r.attempts });
+        return jsonRes({ ok: r.ok, provider: r.provider, attempts: r.attempts, converterDebug: converterDebug.lastInvalid });
       }
 
       // Temporary network diagnosis: which YouTube endpoints are reachable

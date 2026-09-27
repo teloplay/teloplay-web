@@ -8,6 +8,8 @@ import { getVisitorData } from './search.js';
 
 export const STREAM_CACHE = new Map();
 export const IN_FLIGHT = new Map();
+// Last rejected converter link (diagnostics via /api/diag).
+export const converterDebug = { lastInvalid: null };
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 // Datacenter IPs stall youtubei instead of failing fast — 3.5s is enough,
@@ -26,19 +28,21 @@ const PROBE_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (
  * Alive = HTTP 206, or HTTP 200 with an audio/* content-type.
  */
 export async function validateStreamUrl(url, timeoutMs = PROBE_TIMEOUT_MS) {
-  if (!url || typeof url !== 'string' || !url.startsWith('http')) return false;
+  if (!url || typeof url !== 'string' || !url.startsWith('http')) {
+    return { alive: false, status: -1, ct: 'bad-url' };
+  }
   try {
     const res = await fetch(url, {
       method: 'GET',
       signal: timeoutSignal(timeoutMs),
       headers: { 'User-Agent': PROBE_UA, Range: 'bytes=0-1023' },
     });
-    if (res.status === 206) { try { res.body?.cancel(); } catch {} return true; }
     const ct = (res.headers.get('content-type') || '').toLowerCase();
     try { res.body?.cancel(); } catch {}
-    return res.status === 200 && ct.startsWith('audio/');
-  } catch {
-    return false;
+    if (res.status === 206) return { alive: true, status: res.status, ct };
+    return { alive: res.status === 200 && ct.startsWith('audio/'), status: res.status, ct: ct.slice(0, 40) };
+  } catch (e) {
+    return { alive: false, status: -1, ct: 'fetch-fail:' + String(e?.message || e).slice(0, 40) };
   }
 }
 
@@ -368,16 +372,38 @@ export async function tryMediaCdnResolver(videoId) {
       if (progress.success === 1 && progress.download_url) {
         // Links die fast — verify it serves audio before accepting.
         // A dead link returns an HTML page and must never reach the app.
-        const alive = await validateStreamUrl(progress.download_url);
-        if (!alive) return null;
-        return {
-          ok: true,
-          provider: 'media_cdn_exact_video',
-          url: progress.download_url,
-          mimeType: 'audio/mpeg',
-          format: 'mp3',
-          title: progress.title || init.title || 'Audio Track',
+        // NOTE: returns detail object now; callers log it on failure.
+        const v1 = await validateStreamUrl(progress.download_url);
+        if (v1.alive) {
+          return {
+            ok: true,
+            provider: 'media_cdn_exact_video',
+            url: progress.download_url,
+            mimeType: 'audio/mpeg',
+            format: 'mp3',
+            title: progress.title || init.title || 'Audio Track',
+          };
+        }
+        // CDN may need seconds to activate the file — one delayed re-probe
+        // before declaring this conversion dead.
+        await new Promise((r) => setTimeout(r, 3000));
+        const v2 = await validateStreamUrl(progress.download_url);
+        if (v2.alive) {
+          return {
+            ok: true,
+            provider: 'media_cdn_exact_video',
+            url: progress.download_url,
+            mimeType: 'audio/mpeg',
+            format: 'mp3',
+            title: progress.title || init.title || 'Audio Track',
+          };
+        }
+        converterDebug.lastInvalid = {
+          ts: new Date().toISOString(), videoId,
+          url: String(progress.download_url).slice(0, 80),
+          v1, v2,
         };
+        return null;
       }
       if (String(progress.text || '').toLowerCase().includes('error')) return null;
     }
@@ -398,7 +424,7 @@ export async function resolveStreamUrl(videoId) {
     if (age < CACHE_REVALIDATE_AFTER_MS) {
       return { ...cached.data, cached: true };
     }
-    const alive = await validateStreamUrl(cached.data?.url, 4_000);
+    const alive = (await validateStreamUrl(cached.data?.url, 4_000)).alive;
     if (alive) {
       return { ...cached.data, cached: true };
     }
@@ -427,7 +453,11 @@ export async function resolveStreamUrl(videoId) {
     }
 
     // Otherwise, wait for the converter (which was already launched at t=0).
-    const converter = await cdnPromise;
+    let converter = await cdnPromise;
+    if (!converter?.ok) {
+      // One fresh retry: the service pool varies per attempt.
+      converter = await tryMediaCdnResolver(videoId);
+    }
     if (converter?.ok) {
       STREAM_CACHE.set(videoId, { ts: Date.now(), data: converter });
       return converter;
