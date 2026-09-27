@@ -190,8 +190,9 @@ export async function resolveStreamUrl(videoId) {
 export async function handleStreamProxy(request, videoId, corsHeaders = {}) {
   try {
     const info = await resolveStreamUrl(videoId);
-    if (!info.ok || !info.url) {
-      return new Response(JSON.stringify(info), {
+    const targetUrl = info?.directUrl || info?.url;
+    if (!info?.ok || !targetUrl || targetUrl.includes('/api/stream/')) {
+      return new Response(JSON.stringify(info || { ok: false, error: 'Not found' }), {
         status: 404,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
@@ -202,7 +203,7 @@ export async function handleStreamProxy(request, videoId, corsHeaders = {}) {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
     };
 
-    if (info.provider === 'media_cdn_exact_video') {
+    if (info.provider === 'media_cdn_exact_video' || targetUrl.includes('savenow.to')) {
       upstreamHeaders['Referer'] = 'https://loader.to/';
     }
 
@@ -210,7 +211,7 @@ export async function handleStreamProxy(request, videoId, corsHeaders = {}) {
       upstreamHeaders['Range'] = rangeHeader;
     }
 
-    const streamResponse = await fetch(info.url, {
+    const streamResponse = await fetch(targetUrl, {
       method: 'GET',
       headers: upstreamHeaders,
     });
@@ -218,11 +219,12 @@ export async function handleStreamProxy(request, videoId, corsHeaders = {}) {
     if (!streamResponse.ok && streamResponse.status !== 206) {
       STREAM_CACHE.delete(videoId);
       const freshInfo = await resolveStreamUrl(videoId);
-      if (freshInfo.ok && freshInfo.url) {
-        if (freshInfo.provider === 'media_cdn_exact_video') {
+      const freshTarget = freshInfo?.directUrl || freshInfo?.url;
+      if (freshInfo?.ok && freshTarget && !freshTarget.includes('/api/stream/')) {
+        if (freshInfo.provider === 'media_cdn_exact_video' || freshTarget.includes('savenow.to')) {
           upstreamHeaders['Referer'] = 'https://loader.to/';
         }
-        const retryRes = await fetch(freshInfo.url, {
+        const retryRes = await fetch(freshTarget, {
           method: 'GET',
           headers: upstreamHeaders,
         });
