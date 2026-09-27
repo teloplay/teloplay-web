@@ -88,20 +88,19 @@ export async function resolveStreamUrl(videoId, meta = {}) {
       }
     }
 
-    for (const clientType of CLIENT_CANDIDATES) {
-      try {
-        const result = await attemptWithTimeout(clientType, 4000);
-        if (result) {
-          STREAM_CACHE.set(videoId, { ts: Date.now(), data: result });
-          return result;
-        }
-      } catch (err) {
-        lastError = (err && err.message) || String(err);
-        innertubeInstances.delete(clientType);
+    // 1. Try primary InnerTube (VISIONOS) with 2.5s timeout
+    try {
+      const result = await attemptWithTimeout(ClientType.VISIONOS, 2500);
+      if (result) {
+        STREAM_CACHE.set(videoId, { ts: Date.now(), data: result });
+        return result;
       }
+    } catch (err) {
+      lastError = (err && err.message) || String(err);
+      innertubeInstances.delete(ClientType.VISIONOS);
     }
 
-    // ── Tier 2: JioSaavn 320kbps Lossless Studio Fallback ───────────
+    // 2. Immediate Tier-2 Fallback: JioSaavn 320kbps Studio Audio (fast & datacenter unblocked)
     try {
       let title = meta.title || '';
       let artist = meta.artist || '';
@@ -123,6 +122,20 @@ export async function resolveStreamUrl(videoId, meta = {}) {
         }
       }
     } catch (e) {}
+
+    // 3. If Saavn didn't match, try secondary YouTube clients (ANDROID_VR, IOS)
+    for (const clientType of [ClientType.ANDROID_VR, ClientType.IOS]) {
+      try {
+        const result = await attemptWithTimeout(clientType, 2500);
+        if (result) {
+          STREAM_CACHE.set(videoId, { ts: Date.now(), data: result });
+          return result;
+        }
+      } catch (err) {
+        lastError = (err && err.message) || String(err);
+        innertubeInstances.delete(clientType);
+      }
+    }
 
     const errText = 'Could not resolve stream for ' + videoId
       + (lastError ? ': ' + String(lastError).slice(0, 120) : '');
