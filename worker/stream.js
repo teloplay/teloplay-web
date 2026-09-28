@@ -1,7 +1,7 @@
 /**
  * Exact YouTube Audio Stream Resolver & Proxy for TeloPlay Backend
  * Pure YouTube Resolution Pipeline:
- * Tier 1: Direct InnerTube Resolver (VISIONOS / ANDROID_VR / IOS)
+ * Tier 1: Direct InnerTube Resolver (VISIONOS / ANDROID_VR / IOS) with decipher
  * Tier 2: Exact-Video Media CDN Converter (loader.to -> savenow.to exact MP3/M4A)
  * ZERO track substitution — every stream is the exact YouTube video requested.
  */
@@ -13,7 +13,7 @@ export const STREAM_CACHE = new Map();
 export const IN_FLIGHT = new Map();
 const NEG_CACHE = new Map();
 const NEG_TTL_MS = 60_000;
-const CACHE_TTL_MS = 3 * 60 * 60 * 1000; // 3 hours
+const CACHE_TTL_MS = 3 * 60 * 60 * 1000;
 
 const innertubeInstances = new Map();
 
@@ -25,6 +25,7 @@ async function getInnertubeInstance(clientType = ClientType.VISIONOS) {
   const yt = await Innertube.create({
     client_type: clientType,
     visitor_data: vd || undefined,
+    cookie: process.env.YT_COOKIE || undefined,
   });
   innertubeInstances.set(clientType, yt);
   return yt;
@@ -35,6 +36,7 @@ const CLIENT_CANDIDATES = [
   ClientType.ANDROID_VR,
   ClientType.IOS,
 ];
+
 
 /**
  * Exact-Video Media CDN Converter (loader.to -> savenow.to).
@@ -50,6 +52,7 @@ export async function tryMediaCdnResolver(videoId, timeoutMs = 28000) {
         'Referer': 'https://loader.to/',
         'Accept': 'application/json, text/plain, */*',
       },
+      signal: AbortSignal.timeout(10000),
     });
     if (!initResponse.ok) return null;
 
@@ -66,6 +69,7 @@ export async function tryMediaCdnResolver(videoId, timeoutMs = 28000) {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
           'Referer': 'https://loader.to/',
         },
+        signal: AbortSignal.timeout(6000),
       });
       if (!progressResponse.ok) continue;
       const progress = await progressResponse.json();
@@ -74,10 +78,11 @@ export async function tryMediaCdnResolver(videoId, timeoutMs = 28000) {
           ok: true,
           provider: 'media_cdn_exact_video',
           url: progress.download_url,
+          directUrl: progress.download_url,
           mimeType: 'audio/mpeg',
           format: 'mp3',
           bitrate: 192000,
-          title: progress.title || init.title || 'Audio Track',
+          title: progress.title || init.title || 'YouTube Audio',
           author: 'YouTube Audio',
         };
       }
@@ -88,6 +93,7 @@ export async function tryMediaCdnResolver(videoId, timeoutMs = 28000) {
   }
   return null;
 }
+
 
 export async function resolveStreamUrl(videoId) {
   if (!videoId) return { ok: false, error: 'Missing videoId' };
@@ -109,73 +115,85 @@ export async function resolveStreamUrl(videoId) {
   const promise = (async () => {
     let lastError = null;
 
+    // Safe InnerTube attempt with timeout & no unhandled rejections
     async function attemptWithTimeout(clientType, ms) {
       let timer = null;
       try {
         const task = (async () => {
-          const yt = await getInnertubeInstance(clientType);
-          const info = await yt.getBasicInfo(videoId);
-          const format = info.chooseFormat({ type: 'audio', quality: 'best' });
-          if (!format) return null;
-          const streamUrl = await format.decipher(yt.session.player);
-          if (!streamUrl || typeof streamUrl !== 'string' || !streamUrl.startsWith('http')) return null;
-          return {
-            ok: true,
-            provider: 'innertube_' + clientType.toLowerCase(),
-            url: streamUrl,
-            directUrl: streamUrl,
-            mimeType: format.mime_type || 'audio/mp4',
-            itag: format.itag || 140,
-            bitrate: format.bitrate || 128000,
-            contentLength: format.content_length ? Number.parseInt(format.content_length, 10) : undefined,
-            duration: Number.parseInt(info.basic_info.duration || '0', 10),
-            title: info.basic_info.title || 'Unknown',
-            author: info.basic_info.author || 'Unknown',
-          };
+          try {
+            const yt = await getInnertubeInstance(clientType);
+            const info = await yt.getBasicInfo(videoId);
+            if (!info || !info.streaming_data) return null;
+            let format = null;
+            try {
+              format = info.chooseFormat({ type: 'audio', quality: 'best' });
+            } catch {
+              return null;
+            }
+            if (!format) return null;
+            let streamUrl = null;
+            try {
+              streamUrl = await format.decipher(yt.session.player);
+            } catch {
+              return null;
+            }
+            if (!streamUrl || typeof streamUrl !== 'string' || !streamUrl.startsWith('http')) return null;
+            return {
+              ok: true,
+              provider: 'innertube_' + clientType.toLowerCase(),
+              url: streamUrl,
+              directUrl: streamUrl,
+              mimeType: format.mime_type || 'audio/mp4',
+              itag: format.itag || 140,
+              bitrate: format.bitrate || 128000,
+              contentLength: format.content_length ? Number.parseInt(format.content_length, 10) : undefined,
+              duration: Number.parseInt(info.basic_info.duration || '0', 10),
+              title: info.basic_info.title || 'Unknown',
+              author: info.basic_info.author || 'Unknown',
+            };
+          } catch (e) {
+            lastError = e?.message || String(e);
+            return null;
+          }
         })();
-        const timeout = new Promise((_, reject) => {
-          timer = setTimeout(() => reject(new Error('client-timeout')), ms);
+        const timeout = new Promise((resolve) => {
+          timer = setTimeout(() => resolve(null), ms);
         });
         return await Promise.race([task, timeout]);
+      } catch (err) {
+        lastError = err?.message || String(err);
+        return null;
       } finally {
         if (timer) clearTimeout(timer);
       }
     }
 
     // Launch direct InnerTube (VISIONOS) and exact Media CDN concurrently
-    const directPromise = attemptWithTimeout(ClientType.VISIONOS, 3500);
+    const directPromise = attemptWithTimeout(ClientType.VISIONOS, 2500);
     const cdnPromise = tryMediaCdnResolver(videoId, 28000);
 
     // Fast path: if direct YouTube stream resolves within 2.5s, use it!
-    const directFast = await Promise.race([
-      directPromise,
-      new Promise((resolve) => setTimeout(() => resolve(null), 2500)),
-    ]);
-
-    if (directFast) {
+    const directFast = await directPromise;
+    if (directFast && directFast.ok && directFast.url) {
       STREAM_CACHE.set(videoId, { ts: Date.now(), data: directFast });
       return directFast;
     }
 
     // Secondary path: wait for exact Media CDN converter
     const converter = await cdnPromise;
-    if (converter?.ok) {
+    if (converter && converter.ok && converter.url) {
       STREAM_CACHE.set(videoId, { ts: Date.now(), data: converter });
       return converter;
     }
 
-    // If converter failed, try secondary YouTube clients (ANDROID_VR, IOS)
+    // Tertiary path: try secondary YouTube clients (ANDROID_VR, IOS)
     for (const clientType of [ClientType.ANDROID_VR, ClientType.IOS]) {
-      try {
-        const result = await attemptWithTimeout(clientType, 2500);
-        if (result) {
-          STREAM_CACHE.set(videoId, { ts: Date.now(), data: result });
-          return result;
-        }
-      } catch (err) {
-        lastError = (err && err.message) || String(err);
-        innertubeInstances.delete(clientType);
+      const result = await attemptWithTimeout(clientType, 2500);
+      if (result && result.ok && result.url) {
+        STREAM_CACHE.set(videoId, { ts: Date.now(), data: result });
+        return result;
       }
+      innertubeInstances.delete(clientType);
     }
 
     const errText = 'Could not resolve exact YouTube stream for ' + videoId
@@ -195,9 +213,8 @@ export async function resolveStreamUrl(videoId) {
 export async function handleStreamProxy(request, videoId, corsHeaders = {}) {
   try {
     const info = await resolveStreamUrl(videoId);
-    const targetUrl = info?.directUrl || info?.url;
-    if (!info?.ok || !targetUrl || targetUrl.includes('/api/stream/')) {
-      return new Response(JSON.stringify(info || { ok: false, error: 'Not found' }), {
+    if (!info.ok || !info.url) {
+      return new Response(JSON.stringify(info), {
         status: 404,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
@@ -205,10 +222,10 @@ export async function handleStreamProxy(request, videoId, corsHeaders = {}) {
 
     const rangeHeader = request.headers.get('Range') || request.headers.get('range');
     const upstreamHeaders = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15',
     };
 
-    if (info.provider === 'media_cdn_exact_video' || targetUrl.includes('savenow.to')) {
+    if (info.provider === 'media_cdn_exact_video' || info.url.includes('savenow.to')) {
       upstreamHeaders['Referer'] = 'https://loader.to/';
     }
 
@@ -216,7 +233,7 @@ export async function handleStreamProxy(request, videoId, corsHeaders = {}) {
       upstreamHeaders['Range'] = rangeHeader;
     }
 
-    const streamResponse = await fetch(targetUrl, {
+    const streamResponse = await fetch(info.url, {
       method: 'GET',
       headers: upstreamHeaders,
     });
@@ -224,12 +241,8 @@ export async function handleStreamProxy(request, videoId, corsHeaders = {}) {
     if (!streamResponse.ok && streamResponse.status !== 206) {
       STREAM_CACHE.delete(videoId);
       const freshInfo = await resolveStreamUrl(videoId);
-      const freshTarget = freshInfo?.directUrl || freshInfo?.url;
-      if (freshInfo?.ok && freshTarget && !freshTarget.includes('/api/stream/')) {
-        if (freshInfo.provider === 'media_cdn_exact_video' || freshTarget.includes('savenow.to')) {
-          upstreamHeaders['Referer'] = 'https://loader.to/';
-        }
-        const retryRes = await fetch(freshTarget, {
+      if (freshInfo.ok && freshInfo.url) {
+        const retryRes = await fetch(freshInfo.url, {
           method: 'GET',
           headers: upstreamHeaders,
         });
