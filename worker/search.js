@@ -9,18 +9,30 @@ export const YT_HDRS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
 };
 
+let cachedVisitorData = null;
+let visitorDataTs = 0;
+const VD_TTL = 30 * 60 * 1000; // 30 minutes cache
+
 export async function getVisitorData() {
+  if (cachedVisitorData && Date.now() - visitorDataTs < VD_TTL) {
+    return cachedVisitorData;
+  }
   try {
     const res = await fetch('https://music.youtube.com/sw.js_data', {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      signal: AbortSignal.timeout(3500),
     });
     const text = await res.text();
     const clean = text.startsWith(")]}'") ? text.substring(5) : text;
     const parsed = JSON.parse(clean);
     const vd = parsed[0][2].find(i => typeof i === 'string' && (i.startsWith('Cg') || i.startsWith('Cgs')));
+    if (vd) {
+      cachedVisitorData = vd;
+      visitorDataTs = Date.now();
+    }
     return vd || null;
   } catch (e) {
-    return null;
+    return cachedVisitorData || null;
   }
 }
 

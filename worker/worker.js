@@ -60,10 +60,6 @@ export default {
         const limit = parseInt(url.searchParams.get('limit') || '25', 10);
         if (!q.trim()) return jsonRes({ ok: false, error: 'Missing ?q=' }, 400);
         const results = await searchYouTubeMusic(q, limit);
-        // Background pre-warm the first 8 results so the first click plays instantly.
-        for (const track of results.slice(0, 8)) {
-          prewarmStreamUrl(track.videoId);
-        }
         logInfo('/api/search', `${results.length} results in ${Date.now() - t0}ms`);
         return jsonRes({ ok: true, results });
       }
@@ -78,7 +74,9 @@ export default {
         const q = url.searchParams.get('q') || '';
         if (!q.trim()) return jsonRes({ ok: true, suggestions: [] });
         try {
-          const r = await fetch(`https://suggestqueries.google.com/complete/search?client=youtube&ds=yt&q=${encodeURIComponent(q)}`);
+          const r = await fetch(`https://suggestqueries.google.com/complete/search?client=youtube&ds=yt&q=${encodeURIComponent(q)}`, {
+            signal: AbortSignal.timeout(3000),
+          });
           const t = await r.text();
           const m = t.match(/\((.*)\)/);
           return jsonRes({ ok: true, suggestions: m ? JSON.parse(m[1])[1].map((s) => s[0]) : [] });
