@@ -1,6 +1,7 @@
 ﻿import { searchYouTubeMusic, getVisitorData, YT_HDRS } from './search.js';
 import { resolveStreamUrl, handleStreamProxy, STREAM_CACHE, prewarmStreamUrl } from './stream.js';
 import { getSongLyrics, getArtistDetails, getExplorePage, getSongDetails } from './metadata.js';
+import { searchSections, searchSuggestionsRich } from './multi-search.js';
 
 const ERROR_LOG = [];
 const MAX_LOG = 50;
@@ -64,6 +65,15 @@ export default {
         return jsonRes({ ok: true, results });
       }
 
+      if (path === '/api/search-sections') {
+        const q = url.searchParams.get('q') || '';
+        const limitPerSection = parseInt(url.searchParams.get('limitPerSection') || '0', 10);
+        if (!q.trim()) return jsonRes({ ok: false, error: 'Missing ?q=' }, 400);
+        const sections = await searchSections(q, limitPerSection);
+        logInfo('/api/search-sections', `${sections.length} sections in ${Date.now() - t0}ms`);
+        return jsonRes({ ok: true, sections });
+      }
+
       if (path === '/api/prewarm') {
         const ids = (url.searchParams.get('ids') || '').split(',').map((s) => s.trim()).filter(Boolean);
         for (const id of ids) prewarmStreamUrl(id);
@@ -83,6 +93,14 @@ export default {
         } catch (e) {
           return jsonRes({ ok: true, suggestions: [] });
         }
+      }
+
+      if (path === '/api/suggest-rich') {
+        const q = url.searchParams.get('q') || '';
+        if (!q.trim()) return jsonRes({ ok: true, queries: [], items: [] });
+        const richData = await searchSuggestionsRich(q);
+        logInfo('/api/suggest-rich', `${richData.queries.length} queries, ${richData.items.length} items in ${Date.now() - t0}ms`);
+        return jsonRes({ ok: true, ...richData });
       }
 
       if (path === '/api/resolve') {

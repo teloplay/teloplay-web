@@ -490,6 +490,10 @@ function continuationTokens(json) {
 
 export const FILTER_SONG = 'EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D';
 export const FILTER_VIDEO = 'EgWKAQIQAWoKEAkQChAFEAMQBA%3D%3D';
+export const FILTER_ALBUM = 'EgWKAQIYAWoKEAkQBRAKEAMQBA%3D%3D';
+export const FILTER_ARTIST = 'EgWKAQIgAWoKEAkQBRAKEAMQBA%3D%3D';
+export const FILTER_COMMUNITY_PLAYLIST = 'EgWKAQIoAWoKEAkQBRAKEAMQBA%3D%3D';
+export const FILTER_FEATURED_PLAYLIST = 'EgWKAQIwAWoKEAkQBRAKEAMQBA%3D%3D';
 
 async function searchYouTubeMusicEndpoint(query, params, visitorData, continuation) {
   const context = {
